@@ -1,15 +1,15 @@
-import jax.numpy as np
-import jax
-
-import numpy as onp
-
 import equinox as eqx
+import jax
+import jax.numpy as np
+import numpy as onp
 import zodiax as zx
 
+from ._utils import bessel_jn
 from .inference import (
     fisher_matrix as _fisher_matrix,
     laplace_covariance as _laplace_covariance,
 )
+
 
 rad2mas = 180.0 / np.pi * 3600.0 * 1000.0  # convert rad to mas
 mas2rad = np.pi / 180.0 / 3600.0 / 1000.0  # convert mas to rad
@@ -177,7 +177,10 @@ class OIData(zx.Base):
         Flatten closure phases and uncertainties.
         """
         return np.concatenate([self.vis, self.phi]), np.concatenate(
-            [self.d_vis, self.d_phi]
+            [
+                self.d_vis,
+                self.d_phi,
+            ]
         )
 
     def unpack_all(self):
@@ -399,6 +402,199 @@ class BinaryModelCartesian(zx.Base):
         return cvis_binary(uu, vv, self.ddec, self.dra, self.flux)
 
 
+# TODO: add azimuthal modulations
+class BinaryGaussianRimModel(zx.Base):
+    """
+    Represents a chromatic 'disk' rim surrounding a binary star.
+    The primary and secondary star are modelled as point sources. The primary
+    has an additional spectral index slope, while the secondary is considered
+    grey. The rim is modelled as a (potentially azimuthaly modulated) Gaussian
+    rim with its own spectral index slope. In addition, allows one to add a
+    grey overresolved flux background.
+
+    Parameters
+    ----------
+    flux_p : float or array-like
+        Total flux fraction of the primary.
+    dra_p : float or array-like
+        Right-ascension offset of the primary in milliarcseconds.
+    ddec_p : float or array-like
+        Declination offset of the primary in milliarcseconds. Calculated relative
+        to the center of the the disk rim.
+    si_p : float or array-like
+        Spectral index of the primary.
+    flux_s : float or array-like
+        Total flux fraction of the grey secondary.
+    dra_s : float or array-like
+        Right-ascension offset of the secondary in milliarcseconds.
+    ddec_s : float or array-like
+        Declination offset of the secondary in milliarcseconds. Calculated relative
+        to the center of the the disk rim.
+    diam_rim: float or array-like
+        Diameter of the rim in milliarcseconds.
+    fwhm_rim: float or array-like
+        Gaussian FWHM of the rim in milli-arcseconds.
+    inc_rim: float or array-like
+        Apparent inclination of the rim in degrees.
+    pa_rim: float or array-like
+        Position angle of the rim's projected major axis in degrees, measured North to
+        East (i.e. counter-clockwise in conventional astronomical image orientation).
+    si_rim: float or array-like
+        Spectral index of the rim.
+    flux_bkg: float or array-like
+        Total flux fraction of the grey overresolved background.
+    wave0: float or array-like
+        Wavelength at which the total flux fractions are defined in meters.
+    nquad: int
+        Amount of radial points to use for quadrature of the radial profile when
+        calculating the Henkel transforms.
+
+    Notes
+    -----
+    Note that the spectral slope is defined in the wavelength-formulation of flux,
+    i.e. $d$ in $F_{\lambda} \propto \lambda^{d}$.
+    """
+
+    flux_p: jax.Array
+    dra_p: jax.Array
+    ddec_p: jax.Array
+    si_p: jax.Array
+    flux_s: jax.Array
+    dra_s: jax.Array
+    ddec_s: jax.Array
+    diam_rim: jax.Array
+    fwhm_rim: jax.Array
+    inc_rim: jax.Array
+    pa_rim: jax.Array
+    si_rim: jax.Array
+    flux_bkg: jax.Array
+    wave0: jax.Array = eqx.field(static=True)
+    nquad: jax.Array = eqx.field(static=True)
+
+    def __init__(
+        self,
+        flux_p,
+        dra_p,
+        ddec_p,
+        si_p,
+        flux_s,
+        dra_s,
+        ddec_s,
+        diam_rim,
+        fwhm_rim,
+        inc_rim,
+        pa_rim,
+        si_rim,
+        flux_bkg,
+        wave0,
+        nquad=1000,
+    ):
+        """
+        Initialize a cirumbinary Gaussian rim model.
+
+        Parameters
+        ----------
+        flux_p : float or array-like
+            Total flux fraction of the primary.
+        dra_p : float or array-like
+            Right-ascension offset of the primary in milliarcseconds.
+        ddec_p : float or array-like
+            Declination offset of the primary in milliarcseconds. Calculated relative
+            to the center of the the disk rim.
+        si_p : float or array-like
+            Spectral index of the primary.
+        flux_s : float or array-like
+            Total flux fraction of the grey secondary.
+        dra_s : float or array-like
+            Right-ascension offset of the secondary in milliarcseconds.
+        ddec_s : float or array-like
+            Declination offset of the secondary in milliarcseconds. Calculated relative
+            to the center of the the disk rim.
+        diam_rim: float or array-like
+            Diameter of the rim in milliarcseconds.
+        fwhm_rim: float or array-like
+            Gaussian FWHM of the rim in milli-arcseconds.
+        inc_rim: float or array-like
+            Apparent inclination of the rim in degrees.
+        pa_rim: float or array-like
+            Position angle of the rim's projected major axis in degrees, measured North to
+            East (i.e. counter-clockwise in conventional astronomical image orientation).
+        si_rim: float or array-like
+            Spectral index of the rim.
+        flux_bkg: float or array-like
+            Total flux fraction of the grey overresolved background.
+        wave0: float or array-like
+            Wavelength at which the total flux fractions are defined in meters.
+        nquad: int
+            Amount of radial points to use for quadrature of the radial profile when
+            calculating the Henkel transforms.
+        """
+        self.flux_p = np.asarray(flux_p, dtype=float)
+        self.dra_p = np.asarray(dra_p, dtype=float)
+        self.ddec_p = np.asarray(ddec_p, dtype=float)
+        self.si_p = np.asarray(si_p, dtype=float)
+        self.flux_s = np.asarray(flux_s, dtype=float)
+        self.dra_s = np.asarray(dra_s, dtype=float)
+        self.ddec_s = np.asarray(ddec_s, dtype=float)
+        self.diam_rim = np.asarray(diam_rim, dtype=float)
+        self.fwhm_rim = np.asarray(fwhm_rim, dtype=float)
+        self.inc_rim = np.asarray(inc_rim, dtype=float)
+        self.pa_rim = np.asarray(pa_rim, dtype=float)
+        self.si_rim = np.asarray(si_rim, dtype=float)
+        self.flux_bkg = np.asarray(flux_bkg, dtype=float)
+        self.wave0 = np.asarray(wave0, dtype=float)
+        self.nquad = int(nquad)
+
+    def __repr__(self):
+        """Return a readable representation of the model parameters."""
+        repr_str = (
+            f"BinaryGaussianRimModel(flux_p={self.flux_p}, dra_p={self.dra_p}, "
+            f"ddec_p={self.ddec_p}, si_p={self.si_p}, flux_s={self.flux_s}, "
+            f"dra_s={self.dra_s}, ddec_s={self.ddec_s}, diam_rim={self.diam_rim}, "
+            f"fwhm_rim={self.fwhm_rim}, inc_rim={self.inc_rim}, pa_rim={self.pa_rim}, "
+            f"si_rim={self.si_rim}, flux_bkg={self.flux_bkg}, wave0={self.wave0}, "
+            f"nquad={self.nquad}"
+        )
+        return repr_str
+
+    def unpack_all(self):
+        """
+        Return all model parameters.
+
+        Returns
+        -------
+        tuple[array-like, array-like, array-like, array-like, array-like,
+              array-like, array-like, array-like, array-like, array-like,
+              array-like, array-like, array-like, array-like]
+            Tuple ``(flux_p, dra_p, ddec_p, si_p, flux_s, dra_s, ddec_s,
+                     diam_rim, fwhm_rim, inc_rim, pa_rim, si_rim, flux_bkg,
+                     wave0)``.
+        """
+        return self.dra, self.ddec, self.flux
+
+    # TODO: implement
+    def model(self, u, v, wavel):
+        """
+        Evaluate complex visibilities for this Binary with Gaussian rim model.
+
+        Parameters
+        ----------
+        u : array-like
+            Baseline ``u`` coordinates in meters.
+        v : array-like
+            Baseline ``v`` coordinates in meters.
+        wavel : array-like
+            Effective wavelength(s) in meters.
+
+        Returns
+        -------
+        array-like
+            Complex visibility samples on the provided baselines.
+        """
+        # uu, vv = u / wavel, v / wavel
+        pass
+
+
 def cvis_binary_angular(u, v, sep, pa, contrast):
     # adapted from pymask
     """Compute complex visibilities for an angular-parameterized binary model.
@@ -480,6 +676,101 @@ def cvis_binary(u, v, ddec, dra, planet):
     return cvis
 
 
+# TODO: implement
+# TODO: JIT this one?
+def cvis_gaussian_rim():
+    """Compute complex visibilities for a (modulated) Gaussian rim.
+
+    Parameters
+    ----------
+    u : array-like
+        Baseline ``u`` coordinates in wavelength units.
+    v : array-like
+        Baseline ``v`` coordinates in wavelength units.
+
+    Returns
+    -------
+    array-like
+        Complex visibility samples.
+    """
+    # TODO: order of calculation: azimuthally modulae, rotate major axis by given PA;
+    # stretch by factor 's' (which will be a shrinkage factor) along the minor axis;
+    # and only then displace the center by a given amount.
+
+    # NOTE: first should cast complex visibilities into reference frame of the model
+    # without sky rotation and stretch, then call functions which use the Hankel
+    # transforms to calculate the visibilities in this original basis.
+
+    # Transform spatial frequency coordinates to frame of reference where the model rim
+    # is uninclined and the major axis is pointed North (postitive y-axis).
+
+    # ut = u * np.cos(pa_rad) + v * np.sin(pa_rad)
+    # vt = np.cos(inc) * -u * np.sin(pa_rad) + v * np.cos(pa_rad)
+
+    pass
+
+
+# TODO: JIT this one?
+def cvis_radial_profile_modulated():
+    """Compute the complex visibility for a object whose intensity profiles is
+    separable into a symmetric radial profile and cosine azimuthal modulations.
+
+    Notes
+    -----
+    This function does not account for rotation or geometric stretching (e.g. due to
+    inclination). A separate transformation of $uv$ coordinates accounts for this.
+    The phase angles of the cosine modulations are defined relative to the
+    spatial y-axis (North), turning counterclockwise to the x-axis (East). This means
+    that a single 0-th order modulation with a phase angle of $0 \, \mathrm{deg}$
+    results in a bright peak towards the North, and a faint peak towards the South.
+    A phase angle of $90 \, \mathrm{deg}$ would result in a bright peak towards the
+    East, and a faint one towards the West.
+
+    """
+    pass
+
+
+# TODO: implement
+# TODO: JIT this one?
+def hankel_n(u, v, rpos, intensity, n):
+    """Function to compute the $n$-th order Hankel transform of given radial intensity
+    profile. For $n=0$, this returns the complex visibility of a centro-symmetric
+    object with the given radial intensity profile.
+
+    Parameters
+    ----------
+    u : array-like
+        Baseline ``u`` coordinates in wavelength units.
+    v : array-like
+        Baseline ``v`` coordinates in wavelength units.
+    rpos : array-like
+        Radial coordinate positions of the radial profile in milliarcseconds.
+    intensity
+
+    Returns
+    -------
+    array-like
+        $j$-th order Hankel transform evaluated at the specified spatial frequencies
+        ``u`` and ``v``.
+    """
+    rpos_rad = rpos * mas2rad  # put radial positions in radian
+
+    base_norm = np.sqrt(u**2 + v**2)  # baseline norm in wavelength units
+    integrand = (
+        intensity * bessel_jn(n, 2 * np.pi * base_norm * rpos_rad) * rpos_rad
+    )
+
+    cvis = np.trapezoid(integrand, rpos_rad) / np.trapezoid(
+        intensity * rpos_rad, rpos_rad
+    )
+
+    return cvis
+
+
+# TODO: will need an alternative log-like which takes into account parameters being
+# fixed, and also shared accross epochs.
+
+
 def loglike(values, params, data_obj, model_class):
     """
     Abstract log-likelihood function for a given model class and data object, assuming Gaussian errors.
@@ -535,7 +826,10 @@ def loglike_nosignal(values, params, data_obj, model_class):
     model_data = data_obj.model(model_class(**param_dict))
     _, errors = data_obj.flatten_data()
     data = np.concatenate(
-        [np.ones_like(data_obj.vis), np.zeros_like(data_obj.phi)]
+        [
+            np.ones_like(data_obj.vis),
+            np.zeros_like(data_obj.phi),
+        ]
     )
 
     return -0.5 * np.sum((data - model_data) ** 2 / errors**2)
@@ -619,8 +913,8 @@ def laplace_contrast_uncertainty(
     if params is None:
         params = ["dra", "ddec", "flux"]
 
-    objective = lambda f: -loglike(
-        [dra, ddec, f], params, data_obj, model_class
+    objective = lambda f: (
+        -loglike([dra, ddec, f], params, data_obj, model_class)
     )
     # Compute the scalar second derivative d²(-logL)/df² via double grad.
     # Using jax.grad twice makes it explicit that we expect a scalar result.
