@@ -1,8 +1,11 @@
+from functools import partial
+
 import equinox as eqx
 import jax
 import jax.numpy as np
 import numpy as onp
 import zodiax as zx
+from jax import jit
 
 from ._utils import bessel_jn
 from .inference import (
@@ -13,8 +16,9 @@ from .inference import (
 
 rad2mas = 180.0 / np.pi * 3600.0 * 1000.0  # convert rad to mas
 mas2rad = np.pi / 180.0 / 3600.0 / 1000.0  # convert mas to rad
+deg2rad = np.pi / 180.0  # convert deg to rad
+rad2deg = 180.0 / np.pi  # convert rad to deg
 
-dtor = np.pi / 180.0
 i2pi = 1j * 2.0 * np.pi
 
 
@@ -404,7 +408,7 @@ class BinaryModelCartesian(zx.Base):
 
 # TODO: add azimuthal modulations
 class BinaryGaussianRimModel(zx.Base):
-    """
+    r"""
     Represents a chromatic 'disk' rim surrounding a binary star.
     The primary and secondary star are modelled as point sources. The primary
     has an additional spectral index slope, while the secondary is considered
@@ -433,7 +437,7 @@ class BinaryGaussianRimModel(zx.Base):
     diam_rim: float or array-like
         Diameter of the rim in milliarcseconds.
     fwhm_rim: float or array-like
-        Gaussian FWHM of the rim in milli-arcseconds.
+        Gaussian FWHM of the rim in milliarcseconds.
     inc_rim: float or array-like
         Apparent inclination of the rim in degrees.
     pa_rim: float or array-like
@@ -443,15 +447,28 @@ class BinaryGaussianRimModel(zx.Base):
         Spectral index of the rim.
     flux_bkg: float or array-like
         Total flux fraction of the grey overresolved background.
+    az_amps: array-like
+        1D array containing amplitude coefficients for rim cosine azimuthal modulations.
+        The first element is seen as the amplitude for the first-order modulation,
+        the second as the amplitude for the second-order modulation, etc.
+    az_phis: array-like
+        1D array containing offset angles of the rim's cosine azimuthal modulations,
+        relative to the position angle of the rim's projected major axis, in
+        degrees. The first element is seen as the offset for the first-order
+        modulation, the second for the second-order modulation, etc.
     wave0: float or array-like
-        Wavelength at which the total flux fractions are defined in meters.
-    nquad: int
-        Amount of radial points to use for quadrature of the radial profile when
-        calculating the Henkel transforms.
+        Wavelength at which the total flux fractions are defined in meters. Note
+        that this is not a free parameter, but is just fixed at initialization.
 
     Notes
     -----
-    Note that the spectral slope is defined in the wavelength-formulation of flux,
+    * The intensity profiles is separable into a symmetric radial profile and cosine
+    azimuthal modulations, meaning the image intensity can be described in polar image
+    coordinates as $I(r, \theta) = f(r) \left( 1 + \sum_{m=0}^{n}
+    A_m \cos{(m(\theta - \phi_m)} \right)$, where $f(r)$ describes a Gaussian radial
+    intensity profile.
+
+    * Note that the spectral slope is defined in the wavelength-formulation of flux,
     i.e. $d$ in $F_{\lambda} \propto \lambda^{d}$.
     """
 
@@ -468,8 +485,9 @@ class BinaryGaussianRimModel(zx.Base):
     pa_rim: jax.Array
     si_rim: jax.Array
     flux_bkg: jax.Array
+    az_amps: jax.Array
+    az_phis: jax.Array
     wave0: jax.Array = eqx.field(static=True)
-    nquad: jax.Array = eqx.field(static=True)
 
     def __init__(
         self,
@@ -486,8 +504,9 @@ class BinaryGaussianRimModel(zx.Base):
         pa_rim,
         si_rim,
         flux_bkg,
+        az_amps,
+        az_phis,
         wave0,
-        nquad=1000,
     ):
         """
         Initialize a cirumbinary Gaussian rim model.
@@ -513,7 +532,7 @@ class BinaryGaussianRimModel(zx.Base):
         diam_rim: float or array-like
             Diameter of the rim in milliarcseconds.
         fwhm_rim: float or array-like
-            Gaussian FWHM of the rim in milli-arcseconds.
+            Gaussian FWHM of the rim in milliarcseconds.
         inc_rim: float or array-like
             Apparent inclination of the rim in degrees.
         pa_rim: float or array-like
@@ -523,11 +542,18 @@ class BinaryGaussianRimModel(zx.Base):
             Spectral index of the rim.
         flux_bkg: float or array-like
             Total flux fraction of the grey overresolved background.
+        az_amps: array-like
+            1D array containing amplitude coefficients for rim cosine azimuthal modulations.
+            The first element is seen as the amplitude for the first-order modulation,
+            the second as the amplitude for the second-order modulation, etc.
+        az_phis: array-like
+            1D array containing offset angles of the rim's cosine azimuthal modulations,
+            relative to the position angle of the rim's projected major axis, in
+            degrees. The first element is seen as the offset for the first-order
+            modulation, the second for the second-order modulation, etc.
         wave0: float or array-like
-            Wavelength at which the total flux fractions are defined in meters.
-        nquad: int
-            Amount of radial points to use for quadrature of the radial profile when
-            calculating the Henkel transforms.
+            Wavelength at which the total flux fractions are defined in meters. Note
+            that this is not a free parameter, but is just fixed at initialization.
         """
         self.flux_p = np.asarray(flux_p, dtype=float)
         self.dra_p = np.asarray(dra_p, dtype=float)
@@ -542,8 +568,9 @@ class BinaryGaussianRimModel(zx.Base):
         self.pa_rim = np.asarray(pa_rim, dtype=float)
         self.si_rim = np.asarray(si_rim, dtype=float)
         self.flux_bkg = np.asarray(flux_bkg, dtype=float)
+        self.az_amps = np.asarray(az_amps, dtype=float)
+        self.az_phis = np.asarray(az_phis, dtype=float)
         self.wave0 = np.asarray(wave0, dtype=float)
-        self.nquad = int(nquad)
 
     def __repr__(self):
         """Return a readable representation of the model parameters."""
@@ -552,8 +579,8 @@ class BinaryGaussianRimModel(zx.Base):
             f"ddec_p={self.ddec_p}, si_p={self.si_p}, flux_s={self.flux_s}, "
             f"dra_s={self.dra_s}, ddec_s={self.ddec_s}, diam_rim={self.diam_rim}, "
             f"fwhm_rim={self.fwhm_rim}, inc_rim={self.inc_rim}, pa_rim={self.pa_rim}, "
-            f"si_rim={self.si_rim}, flux_bkg={self.flux_bkg}, wave0={self.wave0}, "
-            f"nquad={self.nquad}"
+            f"si_rim={self.si_rim}, flux_bkg={self.flux_bkg}, az_amps={self.az_amps},"
+            f"az_phis={self.az_phis}, wave0={self.wave0}"
         )
         return repr_str
 
@@ -565,14 +592,30 @@ class BinaryGaussianRimModel(zx.Base):
         -------
         tuple[array-like, array-like, array-like, array-like, array-like,
               array-like, array-like, array-like, array-like, array-like,
-              array-like, array-like, array-like, array-like]
+              array-like, array-like, array-like, array-like, array_like,
+              array_like]
             Tuple ``(flux_p, dra_p, ddec_p, si_p, flux_s, dra_s, ddec_s,
-                     diam_rim, fwhm_rim, inc_rim, pa_rim, si_rim, flux_bkg,
-                     wave0)``.
+                     diam_rim, fwhm_rim, inc_rim, pa_rim, si_rim, flux_bkg, az_amps,
+                     az_phis)``.
         """
-        return self.dra, self.ddec, self.flux
+        return (
+            self.flux_p,
+            self.dra_p,
+            self.ddec_p,
+            self.si_p,
+            self.flux_s,
+            self.dra_s,
+            self.ddec_s,
+            self.diam_rim,
+            self.fwhm_rim,
+            self.inc_rim,
+            self.pa_rim,
+            self.si_rim,
+            self.flux_bkg,
+            self.az_amps,
+            self.az_phis,
+        )
 
-    # TODO: implement
     def model(self, u, v, wavel):
         """
         Evaluate complex visibilities for this Binary with Gaussian rim model.
@@ -591,8 +634,40 @@ class BinaryGaussianRimModel(zx.Base):
         array-like
             Complex visibility samples on the provided baselines.
         """
-        # uu, vv = u / wavel, v / wavel
-        pass
+        uu, vv = u / wavel, v / wavel
+
+        # Complex visbilities for Gaussian rim.
+        cvis_rim = cvis_gaussian_rim(
+            uu,
+            vv,
+            0.0,
+            0.0,
+            self.diam_rim,
+            self.fwhm_rim,
+            self.inc_rim,
+            self.pa_rim,
+            self.az_amps,
+            self.az_phis,
+        )
+        # Complex visibilities for binary components.
+        dra_p_rad, ddec_p_rad = self.dra_p * mas2rad, self.ddec_p * mas2rad
+        dra_s_rad, ddec_s_rad = self.dra_s * mas2rad, self.ddec_s * mas2rad
+        cvis_p = np.exp(-i2pi * (uu * dra_p_rad + vv * ddec_p_rad))
+        cvis_s = np.exp(-i2pi * (uu * dra_s_rad + vv * ddec_s_rad))
+
+        # Calculate spectra for each component.
+        flux_rim = 1 - self.flux_p - self.flux_s - self.flux_bkg
+        spec_rim = flux_rim * (wavel / self.wave0) ** self.si_rim
+        spec_p = self.flux_p * (wavel / self.wave0) ** self.si_p
+        spec_s = np.full(spec_rim.shape, self.flux_s)
+        spec_bkg = np.full(spec_rim.shape, self.flux_bkg)
+
+        # Combine into spectral-weighted total complex visibility.
+        cvis_tot = (
+            spec_rim * cvis_rim + spec_p * cvis_p + spec_s * cvis_s
+        ) / (spec_rim + spec_p + spec_s + spec_bkg)
+
+        return cvis_tot
 
 
 def cvis_binary_angular(u, v, sep, pa, contrast):
@@ -620,7 +695,7 @@ def cvis_binary_angular(u, v, sep, pa, contrast):
 
     # normalize visibilities so total power is 1
 
-    th = pa * dtor
+    th = pa * deg2rad
 
     ddec = mas2rad * (sep * np.cos(th))
     dra = -1 * mas2rad * (sep * np.sin(th))
@@ -676,9 +751,7 @@ def cvis_binary(u, v, ddec, dra, planet):
     return cvis
 
 
-# TODO: implement
-# TODO: JIT this one?
-def cvis_gaussian_rim():
+def cvis_gaussian_rim(u, v, dra, ddec, diam, fwhm, inc, pa, az_amps, az_phis):
     """Compute complex visibilities for a (modulated) Gaussian rim.
 
     Parameters
@@ -687,55 +760,87 @@ def cvis_gaussian_rim():
         Baseline ``u`` coordinates in wavelength units.
     v : array-like
         Baseline ``v`` coordinates in wavelength units.
+    dra : float or array-like
+        Right-ascension offset of the rim in milliarcseconds.
+    ddec : float or array-like
+        Declination offset of the rim in milliarcseconds.
+    diam: float or array-like
+        Diameter of the rim in milliarcseconds.
+    fwhm: float or array-like
+        Gaussian FWHM of the rim in milliarcseconds.
+    inc: float or array-like
+        Apparent inclination of the rim in degrees.
+    pa: float or array-like
+        Position angle of the rim's projected major axis in degrees, measured North to
+        East (i.e. counter-clockwise in conventional astronomical image orientation).
+    az_amps: array-like
+        1D array containing amplitude coefficients for cosine azimuthal modulations.
+        The first element is seen as the amplitude for the first-order modulation,
+        the second as the amplitude for the second-order modulation, etc.
+    az_phis: array-like
+        1D array containing offset angles of the cosine azimuthal modulations,
+        relative to the position angle of the rim's projected major axis, in
+        degrees. The first element is seen as the offset for the first-order
+        modulation, the second for the second-order modulation, etc.
 
     Returns
     -------
     array-like
         Complex visibility samples.
     """
-    # TODO: order of calculation: azimuthally modulae, rotate major axis by given PA;
-    # stretch by factor 's' (which will be a shrinkage factor) along the minor axis;
-    # and only then displace the center by a given amount.
-
-    # NOTE: first should cast complex visibilities into reference frame of the model
-    # without sky rotation and stretch, then call functions which use the Hankel
-    # transforms to calculate the visibilities in this original basis.
+    # Relevant changes of units
+    inc_rad, pa_rad, dra_rad, ddec_rad = (
+        inc * deg2rad,
+        pa * deg2rad,
+        dra * deg2rad,
+        ddec * deg2rad,
+    )
 
     # Transform spatial frequency coordinates to frame of reference where the model rim
     # is uninclined and the major axis is pointed North (postitive y-axis).
+    stretch_factor = np.cos(inc_rad)
 
-    # ut = u * np.cos(pa_rad) + v * np.sin(pa_rad)
-    # vt = np.cos(inc) * -u * np.sin(pa_rad) + v * np.cos(pa_rad)
+    # Apply rotation matrix and stretch factor (latter for projected minor rim axis)
+    ut = u * np.cos(pa_rad) + v * np.sin(pa_rad)
+    vt = stretch_factor * (-u * np.sin(pa_rad) + v * np.cos(pa_rad))
 
-    pass
+    # NOTE: we consider the radial profile out to 5 sigma from the peak, i.e. ~3.73E-6
+    # of the peak flux. Unless we're dealing with even higher contrast observations, we
+    # should be fine, but should be kept in mind that this is hardcoded for now.
+    std_rim = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    rin, rout = (diam / 2.0) - 5.0 * std_rim, (diam / 2.0) + 5.0 * std_rim
+    # Make sure lower bound is not negative here.
+    rin = np.max(0.0, rin)
 
+    # Create radial position profile in milliarcseconds.
+    # NOTE: radial steps are 2% of the rim's sigma in size. This is hardcoded, but
+    # should be fine for any reasonable interferomter configuration and rim
+    # we expect to use/resolve in the near future.
+    rpos = np.linspace(rin, rout, 500)
 
-# TODO: JIT this one?
-def cvis_radial_profile_modulated():
-    """Compute the complex visibility for a object whose intensity profiles is
-    separable into a symmetric radial profile and cosine azimuthal modulations.
+    # Get Gaussian intensity profile.
+    rprof = 1.0 * np.exp((rpos - diam / 2.0) ** 2.0 / 2.0 * std_rim**2.0)
 
-    Notes
-    -----
-    This function does not account for rotation or geometric stretching (e.g. due to
-    inclination). A separate transformation of $uv$ coordinates accounts for this.
-    The phase angles of the cosine modulations are defined relative to the
-    spatial y-axis (North), turning counterclockwise to the x-axis (East). This means
-    that a single 0-th order modulation with a phase angle of $0 \, \mathrm{deg}$
-    results in a bright peak towards the North, and a faint peak towards the South.
-    A phase angle of $90 \, \mathrm{deg}$ would result in a bright peak towards the
-    East, and a faint one towards the West.
+    # Compute complex visibilities.
+    cvis = cvis_radial_profile_modulated(ut, vt, rpos, rprof, az_amps, az_phis)
 
-    """
-    pass
+    # Apply offset phase-factor.
+    phi = np.exp(-i2pi * (u * dra_rad + v * ddec_rad))
+    cvis *= phi
+
+    return cvis
 
 
 # TODO: implement
 # TODO: JIT this one?
-def hankel_n(u, v, rpos, intensity, n):
-    """Function to compute the $n$-th order Hankel transform of given radial intensity
-    profile. For $n=0$, this returns the complex visibility of a centro-symmetric
-    object with the given radial intensity profile.
+def cvis_radial_profile_modulated(
+    u, v, rpos, intensity, az_amps, az_phis, *, nbase=100
+):
+    r"""Compute the complex visibility for a object whose intensity profiles is
+    separable into a symmetric radial profile and cosine azimuthal modulations,
+    meaning the image intensity can be described in polar image coordinates as
+    $I(r, \theta) = f(r) \left( 1 + \sum_{m=0}^{n} A_m \cos{(m(\theta - \phi_m)}
+    \right)$, where $f(r)$ describes the base radial intensity profile.
 
     Parameters
     ----------
@@ -745,26 +850,97 @@ def hankel_n(u, v, rpos, intensity, n):
         Baseline ``v`` coordinates in wavelength units.
     rpos : array-like
         Radial coordinate positions of the radial profile in milliarcseconds.
-    intensity
+    intensity: array-like
+        Radial intensity profile defined at the ``rpos`` positions.
+    az_amps: array-like
+        1D array containing amplitude coefficients for cosine azimuthal modulations.
+        The first element is seen as the amplitude for the first-order modulation,
+        the second as the amplitude for the second-order modulation, etc.
+    az_phis: array-like
+        1D array containing offset angles of the cosine azimuthal modulations,
+        relative to the position angle of the rim's projected major axis, in
+        degrees. The first element is seen as the offset for the first-order
+        modulation, the second for the second-order modulation, etc.
+    nbase: int
+        Number of baseline length values to consider during the calculation. The
+        required Hankel transforms will then be calculated only for ``nbase`` baseline
+        lengths, and then lineary interpolated to the baseline lenghts corresponding
+        to the given ``u`` and ``v``
+
+    Notes
+    -----
+    The radial profile is used in trapezoidal quadrature to calculate the Hankel
+    transforms. It's best to make sure that ``rpos`` resolves the radial intensity
+    profile fairly well.
+
+    This function does not account for rotation or geometric stretching (e.g. due to
+    inclination). A separate transformation of $uv$ coordinates should account for this.
+    The phase angles of the cosine modulations are defined relative to the
+    spatial y-axis (North), turning counterclockwise to the x-axis (East). This means
+    that a single 0-th order modulation with a phase angle of $0 \, \mathrm{deg}$
+    results in a bright peak towards the North, and a faint peak towards the South.
+    A phase angle of $90 \, \mathrm{deg}$ would result in a bright peak towards the
+    East, and a faint one towards the West.
+    """
+
+    # NOTE: maybe you do not wish to calculate the Hankel transform for every single
+    # single UV value here, might just take a subsample and then linearly interpolate
+    # cause it'll be really expensive otherwise
+
+    pass
+
+
+@partial(jit, static_argnames=["n"])
+def hankel_n(n, u, v, rpos, intensity):
+    """Function to compute the $n$-th order Hankel transform of given radial intensity
+    profile. For $n=0$, this returns the complex visibility of a centro-symmetric
+    object with the given radial intensity profile.
+
+    Parameters
+    ----------
+    n : int
+        The order of the Hankel transform to calculate.
+    u : array-like
+        Baseline ``u`` coordinates in wavelength units.
+    v : array-like
+        Baseline ``v`` coordinates in wavelength units.
+    rpos : array-like
+        Radial coordinate positions of the radial profile in milliarcseconds.
+    intensity: array-like
+        Radial intensity profile defined at the ``rpos`` positions.
 
     Returns
     -------
     array-like
-        $j$-th order Hankel transform evaluated at the specified spatial frequencies
+        $n$-th order Hankel transform evaluated at the specified spatial frequencies
         ``u`` and ``v``.
     """
-    rpos_rad = rpos * mas2rad  # put radial positions in radian
+    rpos_rad = rpos * mas2rad  # Put radial positions in radian.
+    base_norm = np.hypot(
+        u, v
+    )  # Baseline norm in wavelength units (cycles/rad).
 
-    base_norm = np.sqrt(u**2 + v**2)  # baseline norm in wavelength units
-    integrand = (
-        intensity * bessel_jn(n, 2 * np.pi * base_norm * rpos_rad) * rpos_rad
-    )
+    # Calculate the scalar Hankel transform normalization factor (only needs to be
+    # computed once).
+    hankel_fnorm = np.trapezoid(intensity * rpos_rad, rpos_rad)
 
-    cvis = np.trapezoid(integrand, rpos_rad) / np.trapezoid(
-        intensity * rpos_rad, rpos_rad
-    )
+    # Broadcast multiply into a 2D kernel of shape (Nb, Nr) containing all possible
+    # multiplied versions of baseline and radial intensity position.
+    x = 2.0 * np.pi * base_norm[:, None] * rpos_rad[None, :]
 
-    return cvis
+    # Calculate bessel function for each element in x array.
+    kernel = bessel_jn(n, x)
+
+    # Set up array of integrands where we have to radially integrate over the second
+    # axis with broadcasting (i.e. shape (Nb, Nr)).
+    integrand_arr = intensity[None, :] * kernel * rpos_rad[None, :]
+
+    # Integrate each row across radial axis, collecting the result for each into
+    # vector of shape (Nb,), giving the normalized n-th Hankel transform for each
+    # baseline.
+    hankel_n = np.trapezoid(integrand_arr, rpos_rad, axis=1) / hankel_fnorm
+
+    return hankel_n
 
 
 # TODO: will need an alternative log-like which takes into account parameters being

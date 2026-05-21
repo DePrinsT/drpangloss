@@ -7,6 +7,7 @@ Module-level API for interferometric data containers and binary models.
 - [OIData](classes/oidata.md)
 - [BinaryModelAngular](classes/binary_model_angular.md)
 - [BinaryModelCartesian](classes/binary_model_cartesian.md)
+- [BinaryGaussianRimModel](classes/binary_gaussian_rim_model.md)
 
 ## Functions
 
