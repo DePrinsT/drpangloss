@@ -75,66 +75,234 @@ class OIData(zx.Base):
                 "No phase data found in OIFITS file"
             )
 
-            # get the data from the oifits file
-            self.wavel = np.array(
-                data[1].data["EFF_WAVE"], dtype=float
-            )  # note that for AMI this is scalar but for CHARA it is an array
+            # Start off with empty 1D JAX arrays to concatenate to. We assume 1 element
+            # per probed spatial frequency point. OIFITS data arrays are shaped (Nb, Nw)
+            # , with Nb the number of baselines and Nw the number of wavelengths -> we
+            # row-flatten these to 1D (Nb * Nw,) arrays. I.e. the first Nw elements
+            # correspond to the different wavelength channels of the first baseline.
+            # This will require some tiling / repeating of the wavelength solution
+            # and baseline coordinates.
+            (
+                self.vis,
+                self.d_vis,
+                self.phi,
+                self.d_phi,
+                self.u,
+                self.v,
+                self.wavel,
+                self.i_cps1,
+                self.i_cps2,
+                self.i_cps3,
+            ) = (np.array([], dtype=float),) * 10
 
-            # if square visibilities are available, get them, otherwise get unsquared visibilities
-            if "OI_VIS2" in data_names:
-                visdata = data["OI_VIS2"]
-                self.vis = np.array(visdata.data["VIS2DATA"], dtype=float)
-                self.d_vis = np.array(visdata.data["VIS2ERR"], dtype=float)
-                vis_sta_index = visdata.data["STA_INDEX"]
+            # loop over wavelength solution HDUs and find corresponding
+            # visibilities/phases based on INSNAME header keyword.
+            hdu_wave_list = [
+                hdu for hdu in data if hdu.name == "OI_WAVELENGTH"
+            ]
+            for hdu_wave in hdu_wave_list:
+                # get wavelength solution as 1D array.
+                wavel_sol = np.array(hdu_wave.data["EFF_WAVE"], dtype=float)
+                insname = hdu_wave.header["INSNAME"]
+                # get number of previously loaded visibility measurements
+                nvis_old = self.vis.size
 
-                self.u, self.v = (
-                    np.array(visdata.data["UCOORD"], dtype=float),
-                    np.array(visdata.data["VCOORD"], dtype=float),
-                )
+                # look up all corresponding HDUs matched based on INSNAME keyword
+                hdu_vis2_list = [
+                    hdu
+                    for hdu in data
+                    if (
+                        hdu.name == "OI_VIS2"
+                        and hdu.header["INSNAME"] == insname
+                    )
+                ]
+                hdu_vis_list = [
+                    hdu
+                    for hdu in data
+                    if (
+                        hdu.name == "OI_VIS"
+                        and hdu.header["INSNAME"] == insname
+                    )
+                ]
+                hdu_t3_list = [
+                    hdu
+                    for hdu in data
+                    if (
+                        hdu.name == "OI_T3"
+                        and hdu.header["INSNAME"] == insname
+                    )
+                ]
 
-                self.v2_flag = True
+                # if square visibilities are available, get them, otherwise get unsquared visibilities
+                if len(hdu_vis2_list) != 0:
+                    # Add data to 1D array attributes.
+                    hdu_vis = hdu_vis2_list[0]
+                    vis_arr = np.array(hdu_vis.data["VIS2DATA"], dtype=float)
+                    d_vis_arr = np.array(hdu_vis.data["VIS2ERR"], dtype=float)
+                    self.vis = np.concatenate((self.vis, vis_arr.flatten()))
+                    self.d_vis = np.concatenate(
+                        (
+                            self.d_vis,
+                            d_vis_arr.flatten(),
+                        )
+                    )
+                    self.wavel = np.concatenate(
+                        (
+                            self.wavel,
+                            np.tile(wavel_sol, vis_arr.shape[0]),
+                        )
+                    )
+                    u = np.array(hdu_vis.data["UCOORD"], dtype=float)
+                    v = np.array(hdu_vis.data["VCOORD"], dtype=float)
+                    self.u = np.concatenate(
+                        (
+                            self.u,
+                            np.repeat(u, wavel_sol.size),
+                        )
+                    )
+                    self.v = np.concatenate(
+                        (
+                            self.v,
+                            np.repeat(v, wavel_sol.size),
+                        )
+                    )
 
-            elif "OI_VIS" in data_names:
-                visdata = data["OI_VIS"]
-                vis_key = (
-                    "VISAMP" if "VISAMP" in visdata.data.names else "VISPHI"
-                )
-                d_vis_key = (
-                    "VISAMPERR"
-                    if "VISAMPERR" in visdata.data.names
-                    else "VISERR"
-                )
-                self.vis = np.array(visdata.data[vis_key], dtype=float)
-                self.d_vis = np.array(visdata.data[d_vis_key], dtype=float)
-                self.u, self.v = (
-                    np.array(visdata.data["UCOORD"], dtype=float),
-                    np.array(visdata.data["VCOORD"], dtype=float),
-                )
-                vis_sta_index = np.array(visdata.data["STA_INDEX"], dtype=int)
+                    # Stance indices for matching with closure phase data.
+                    vis_sta_index = hdu_vis.data["STA_INDEX"]
 
-                self.v2_flag = False
+                    self.v2_flag = True
+                elif len(hdu_vis_list) != 0:
+                    # Add data to 1D array attributes.
+                    hdu_vis = hdu_vis_list[0]
+                    vis_key = (
+                        "VISAMP"
+                        if "VISAMP" in hdu_vis.data.names
+                        else "VISPHI"
+                    )
+                    d_vis_key = (
+                        "VISAMPERR"
+                        if "VISAMPERR" in hdu_vis.data.names
+                        else "VISERR"
+                    )
+                    vis_arr = np.array(hdu_vis.data[vis_key], dtype=float)
+                    d_vis_arr = np.array(hdu_vis.data[d_vis_key], dtype=float)
+                    self.vis = np.concatenate((self.vis, vis_arr.flatten()))
+                    self.d_vis = np.concatenate(
+                        (
+                            self.d_vis,
+                            d_vis_arr.flatten(),
+                        )
+                    )
+                    self.wavel = np.concatenate(
+                        (
+                            self.wavel,
+                            np.tile(wavel_sol, vis_arr.shape[0]),
+                        )
+                    )
+                    u = np.array(hdu_vis.data["UCOORD"], dtype=float)
+                    v = np.array(hdu_vis.data["VCOORD"], dtype=float)
+                    self.u = np.concatenate(
+                        (
+                            self.u,
+                            np.repeat(u, wavel_sol.size),
+                        )
+                    )
+                    self.v = np.concatenate(
+                        (
+                            self.v,
+                            np.repeat(v, wavel_sol.size),
+                        )
+                    )
 
-            # if absolute phases are available, get them, otherwise get closure phases
-            if "OI_PHI" in data_names:
-                phidata = data["OI_PHI"]
-                self.phi = np.array(phidata.data["VISPHI"], dtype=float)
-                self.d_phi = np.array(phidata.data["VISERR"], dtype=float)
-                self.i_cps1, self.i_cps2, self.i_cps3 = None, None, None
+                    # Stance indices for matching with closure phase data.
+                    vis_sta_index = hdu_vis.data["STA_INDEX"]
 
-                self.cp_flag = False
+                    self.v2_flag = False
+                else:
+                    raise ValueError(
+                        "No corresponding OI_VIS2 or OI_VIS table found"
+                        f"for OI_WAVELENGTH table with INSNAME: {insname}."
+                    )
 
-            elif "OI_T3" in data_names:
-                phidata = data["OI_T3"]
-                self.phi = np.array(phidata.data["T3PHI"], dtype=float)
-                self.d_phi = np.array(phidata.data["T3PHIERR"], dtype=float)
+                # if absolute phases are available, get them, otherwise get closure phasess
+                if (
+                    len(hdu_vis_list) != 0
+                    and hdu_vis_list[0].header["PHITYP"] == "absolute"
+                ):
+                    hdu_phi = hdu_vis_list[0]
+                    phi_arr = np.array(hdu_phi.data["VISPHI"], dtype=float)
+                    d_phi_arr = np.array(
+                        hdu_phi.data["VISPHIERR"], dtype=float
+                    )
+                    self.phi = np.concatenate((self.phi, phi_arr.flatten()))
+                    self.d_phi = np.concatenate(
+                        (
+                            self.d_phi,
+                            d_phi_arr.flatten(),
+                        )
+                    )
+                    self.i_cps1, self.i_cps2, self.i_cps3 = None, None, None
 
-                cp_sta_index = np.array(phidata.data["STA_INDEX"], dtype=int)
-                self.i_cps1, self.i_cps2, self.i_cps3 = cp_indices(
-                    vis_sta_index, cp_sta_index
-                )
+                    self.cp_flag = False
+                elif len(hdu_t3_list) != 0:
+                    hdu_phi = hdu_t3_list[0]
+                    phi_arr = np.array(hdu_phi.data["T3PHI"], dtype=float)
+                    d_phi_arr = np.array(hdu_phi.data["T3PHIERR"], dtype=float)
+                    self.phi = np.concatenate((self.phi, phi_arr.flatten()))
+                    self.d_phi = np.concatenate(
+                        (
+                            self.d_phi,
+                            d_phi_arr.flatten(),
+                        )
+                    )
+                    cp_sta_index = np.array(
+                        hdu_phi.data["STA_INDEX"], dtype=int
+                    )
 
-                self.cp_flag = True
+                    # get indices of the baselines of the corresponding visibility
+                    # measurements (i.e. index of the corresponding value in self.vis).
+                    # We separately account for number of wavelength channels and
+                    # previously loaded measurements below
+                    i_cps1, i_cps2, i_cps3 = cp_indices(
+                        vis_sta_index, cp_sta_index
+                    )
 
+                    # visibility indices for 1st wavelength channels
+                    i_cps1 *= wavel_sol.size
+                    i_cps2 *= wavel_sol.size
+                    i_cps3 *= wavel_sol.size
+
+                    # squeeze in channel offsets with broadcasting and account for
+                    # previously loaded visibility measurments
+                    i_wave_offsets = np.arange(0, wavel_sol.size)[
+                        None, :
+                    ]  # squeeze in channel offsets (shape (1, Nw))
+                    i_cps1 = (
+                        i_cps1[:, None] + i_wave_offsets
+                    ).ravel() + nvis_old
+                    i_cps2 = (
+                        i_cps2[:, None] + i_wave_offsets
+                    ).ravel() + nvis_old
+                    i_cps3 = (
+                        i_cps3[:, None] + i_wave_offsets
+                    ).ravel() + nvis_old
+
+                    self.i_cps1 = np.concatenate((self.i_cps1, i_cps1))
+                    self.i_cps2 = np.concatenate((self.i_cps2, i_cps2))
+                    self.i_cps3 = np.concatenate((self.i_cps3, i_cps3))
+
+                    # make sure the indices are integer
+                    self.i_cps1 = np.astype(self.i_cps1, int)
+                    self.i_cps2 = np.astype(self.i_cps2, int)
+                    self.i_cps3 = np.astype(self.i_cps3, int)
+
+                    self.cp_flag = True
+                else:
+                    raise ValueError(
+                        "No corresponding absolute phases in OI_VIS table or closure"
+                        "phases in OI_T3 table found for OI_WAVELENGTH table with "
+                        f"INSNAME: {insname}."
+                    )
         else:
             # assume data is a dict of the form {'u':u,'v':v,'wavel':wavel,'vis':vis,'d_vis':d_vis,
             #'phi':phi,'d_phi':d_phi,'i_cps1':i_cps1,'i_cps2':i_cps2,'i_cps3':i_cps3,'v2_flag':v2_flag,'cp_flag':cp_flag}
@@ -406,15 +574,14 @@ class BinaryModelCartesian(zx.Base):
         return cvis_binary(uu, vv, self.ddec, self.dra, self.flux)
 
 
-# TODO: add azimuthal modulations
 class BinaryGaussianRimModel(zx.Base):
     r"""
     Represents a chromatic 'disk' rim surrounding a binary star.
     The primary and secondary star are modelled as point sources. The primary
     has an additional spectral index slope, while the secondary is considered
-    grey. The rim is modelled as a (potentially azimuthaly modulated) Gaussian
-    rim with its own spectral index slope. In addition, allows one to add a
-    grey overresolved flux background.
+    grey. The rim is modelled as a (potentially azimuthaly modulated) infinitely
+    thin rim with its own spectral index slope, convolved with an isotropic 2D Gaussian.
+    In addition, allows one to add a grey overresolved flux background.
 
     Parameters
     ----------
@@ -487,7 +654,7 @@ class BinaryGaussianRimModel(zx.Base):
     flux_bkg: jax.Array
     az_amps: jax.Array
     az_phis: jax.Array
-    wave0: jax.Array = eqx.field(static=True)
+    wave0: float = eqx.field(static=True)
 
     def __init__(
         self,
@@ -551,7 +718,7 @@ class BinaryGaussianRimModel(zx.Base):
             relative to the position angle of the rim's projected major axis, in
             degrees. The first element is seen as the offset for the first-order
             modulation, the second for the second-order modulation, etc.
-        wave0: float or array-like
+        wave0: float
             Wavelength at which the total flux fractions are defined in meters. Note
             that this is not a free parameter, but is just fixed at initialization.
         """
@@ -570,7 +737,7 @@ class BinaryGaussianRimModel(zx.Base):
         self.flux_bkg = np.asarray(flux_bkg, dtype=float)
         self.az_amps = np.asarray(az_amps, dtype=float)
         self.az_phis = np.asarray(az_phis, dtype=float)
-        self.wave0 = np.asarray(wave0, dtype=float)
+        self.wave0 = float(wave0)
 
     def __repr__(self):
         """Return a readable representation of the model parameters."""
@@ -659,8 +826,8 @@ class BinaryGaussianRimModel(zx.Base):
         flux_rim = 1 - self.flux_p - self.flux_s - self.flux_bkg
         spec_rim = flux_rim * (wavel / self.wave0) ** self.si_rim
         spec_p = self.flux_p * (wavel / self.wave0) ** self.si_p
-        spec_s = np.full(spec_rim.shape, self.flux_s)
-        spec_bkg = np.full(spec_rim.shape, self.flux_bkg)
+        spec_s = np.ones_like(spec_rim) * self.flux_s
+        spec_bkg = np.ones_like(spec_rim) * self.flux_bkg
 
         # Combine into spectral-weighted total complex visibility.
         cvis_tot = (
@@ -668,6 +835,60 @@ class BinaryGaussianRimModel(zx.Base):
         ) / (spec_rim + spec_p + spec_s + spec_bkg)
 
         return cvis_tot
+
+    # TODO: implement
+    def get_img(npix, ps):
+        """Get an image of the model rim intensity. The returned image is normalized
+        so the sum of the intensity value over all pixels is one.
+
+        Parameters
+        ----------
+        npix : int
+            Number of image pixels along the field-of-view.
+        ps : array-like or float
+            Pixelscale of the image pixels in milliarcsecond.
+
+        Returns
+        -------
+        array-like
+           A 2D array containing the image intensities, normalized so the sum over
+           pixels equals one.
+
+        Notes
+        -----
+        Note that the image is calculated so the $(x,y) = (0,0)$ point (i.e. the center
+        of the field-of-view) lies at the geometric center of the image. For an odd
+        amount of pixels, this corresponds to the center of the centermost pixel (as
+        plotted using e.g. `plt.imshow()`). For an even amount of pixels, this
+        corresponds to the vertex between the four centermost pixels.
+        """
+        # img = np.zeros(npix, npix)  # Initialize empty image
+        pass
+
+    # TODO: implement
+    def calc_img_intensity(x, y):
+        """Calculate the rim image intensity.
+
+        Note that the central stars are left out as they are point sources. Similarly,
+        the overresolved background is omitted since it has no spatially defined
+        location in the field-of-view.
+
+        Parameters
+        ----------
+        x : array-like
+            1D array of image x-positions (measured West to East) of points for which
+            you wish to calculate the intensity.
+        y : array-like
+            1D array of image y-positions (measured South to North) of points for which
+            you wish to calculate the intensity.
+
+        Returns
+        -------
+        array-like
+            A 1D array containing the rim image intensities at the specified positions.
+        """
+
+        pass
 
 
 def cvis_binary_angular(u, v, sep, pa, contrast):
@@ -751,8 +972,45 @@ def cvis_binary(u, v, ddec, dra, planet):
     return cvis
 
 
+def cvis_gaussian(u, v, fwhm):
+    """Compute the complex visibility of a centered isotropic 2D Gaussian.
+
+    Parameters
+    ----------
+    u : array-like
+        Baseline ``u`` coordinates in wavelength units (cycles / rad).
+    v : array-like
+        Baseline ``v`` coordinates in wavelength units (cycles / rad).
+    fwhm : float or array-like
+        Full-width-half-maximum of the Gaussian in milliarcseconds.
+
+    Returns
+    -------
+    array-like
+        Complex visibility samples.
+
+    Notes
+    -----
+    This function does not account for rotation and geometric stretching (e.g. due to
+    inclination). A separate transformation of $uv$ coordinates should account for this.
+    """
+    # Change of units.
+    fwhm_rad = fwhm * mas2rad
+
+    # Baseline norm.
+    base_norm = np.hypot(u, v)  # In wavelength units (cycles/rad).
+
+    # Calculate complex visibility (forced to be complex).
+    cvis = (
+        np.exp(-(np.pi**2) * fwhm_rad**2 * base_norm**2 / (4 * np.log(2))) + 0j
+    )
+
+    return cvis
+
+
 def cvis_gaussian_rim(u, v, dra, ddec, diam, fwhm, inc, pa, az_amps, az_phis):
-    """Compute complex visibilities for a (modulated) Gaussian rim.
+    """Compute complex visibilities for a (modulated) rim, consisting of a radial Dirac
+    delta ring (infinitely thin) subsequently convolved with an isotropic 2D Gaussian.
 
     Parameters
     ----------
@@ -789,41 +1047,26 @@ def cvis_gaussian_rim(u, v, dra, ddec, diam, fwhm, inc, pa, az_amps, az_phis):
         Complex visibility samples.
     """
     # Relevant changes of units
-    inc_rad, pa_rad, dra_rad, ddec_rad = (
+    inc_rad, dra_rad, ddec_rad = (
         inc * deg2rad,
-        pa * deg2rad,
-        dra * deg2rad,
-        ddec * deg2rad,
+        dra * mas2rad,
+        ddec * mas2rad,
     )
 
     # Transform spatial frequency coordinates to frame of reference where the model rim
     # is uninclined and the major axis is pointed North (postitive y-axis).
-    stretch_factor = np.cos(inc_rad)
+    stretch_factor = np.maximum(
+        np.cos(inc_rad), 1e-8
+    )  # Doesn't explode at i=90 deg.
+    ut, vt = spat_freq_elliptical_transf(u, v, pa, stretch_factor)
 
-    # Apply rotation matrix and stretch factor (latter for projected minor rim axis)
-    ut = u * np.cos(pa_rad) + v * np.sin(pa_rad)
-    vt = stretch_factor * (-u * np.sin(pa_rad) + v * np.cos(pa_rad))
-
-    # NOTE: we consider the radial profile out to 5 sigma from the peak, i.e. ~3.73E-6
-    # of the peak flux. Unless we're dealing with even higher contrast observations, we
-    # should be fine, but should be kept in mind that this is hardcoded for now.
-    std_rim = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
-    rin, rout = (diam / 2.0) - 5.0 * std_rim, (diam / 2.0) + 5.0 * std_rim
-    # Make sure lower bound is not negative here.
-    rin = np.max(0.0, rin)
-
-    # Create radial position profile in milliarcseconds.
-    # NOTE: radial steps are 2% of the rim's sigma in size. This is hardcoded, but
-    # should be fine for any reasonable interferomter configuration and rim
-    # we expect to use/resolve in the near future.
-    rpos = np.linspace(rin, rout, 500)
-
-    # Get Gaussian intensity profile.
-    rprof = 1.0 * np.exp((rpos - diam / 2.0) ** 2.0 / 2.0 * std_rim**2.0)
-
-    # Compute complex visibilities.
-    cvis = cvis_radial_profile_modulated(ut, vt, rpos, rprof, az_amps, az_phis)
-
+    # Compute complex visibilities for Dirac delta (infinitely thin) modulated ring.
+    cvis = cvis_radial_dirac_delta_modulated(
+        ut, vt, diam / 2.0, az_amps, az_phis
+    )
+    # Add effect of convolution in image-plane with an isotropic Gaussian of the given
+    # FWHM in the original image frame of reference.
+    cvis *= cvis_gaussian(u, v, fwhm)
     # Apply offset phase-factor.
     phi = np.exp(-i2pi * (u * dra_rad + v * ddec_rad))
     cvis *= phi
@@ -831,94 +1074,247 @@ def cvis_gaussian_rim(u, v, dra, ddec, diam, fwhm, inc, pa, az_amps, az_phis):
     return cvis
 
 
-# TODO: implement
-# TODO: JIT this one?
-def cvis_radial_profile_modulated(
-    u, v, rpos, intensity, az_amps, az_phis, *, nbase=100
-):
-    r"""Compute the complex visibility for a object whose intensity profiles is
-    separable into a symmetric radial profile and cosine azimuthal modulations,
-    meaning the image intensity can be described in polar image coordinates as
-    $I(r, \theta) = f(r) \left( 1 + \sum_{m=0}^{n} A_m \cos{(m(\theta - \phi_m)}
-    \right)$, where $f(r)$ describes the base radial intensity profile.
+def cvis_radial_dirac_delta_modulated(u, v, r0, az_amps, az_phis):
+    r"""Compute the complex visibility for an azimuthally modulated radial dirac
+    delta ring. The image intensity can be described in polar image coordinates as
+    $I(r, \theta) \propto \delta(r-r_0) \left( 1 + \sum_{m=0}^{n} A_m
+    \cos{(m(\theta - \phi_m)} \right)$, where $r_0$ defines the ring's radial position,
+    $A_m$ the amplitude and $\phi_m$ the position phase angle (defined counter-clockwise
+    , North to East) for the m-th order modulation.
+
+    This is a special analytical case of the [cvis_radial_profile_modulated][] function,
+    which uses quadrature to calculate the complex visibility for any provided radial
+    profile. Analytical visibility calculation using this function is much faster if the
+    image can be described as a convolution of a infinitesimally thin ring with another
+    component whose 2D Fourier transform is known analytically (e.g. a 2D Gaussian).
 
     Parameters
     ----------
     u : array-like
-        Baseline ``u`` coordinates in wavelength units.
+        Baseline ``u`` coordinates in wavelength units (cycles / rad).
     v : array-like
-        Baseline ``v`` coordinates in wavelength units.
-    rpos : array-like
-        Radial coordinate positions of the radial profile in milliarcseconds.
-    intensity: array-like
-        Radial intensity profile defined at the ``rpos`` positions.
-    az_amps: array-like
+        Baseline ``v`` coordinates in wavelength units (cycles / rad).
+    r0 : float or array-like
+        Scalar with the radial position of the ring in milliarcseconds.
+    az_amps : array-like
         1D array containing amplitude coefficients for cosine azimuthal modulations.
         The first element is seen as the amplitude for the first-order modulation,
         the second as the amplitude for the second-order modulation, etc.
-    az_phis: array-like
+    az_phis : array-like
         1D array containing offset angles of the cosine azimuthal modulations,
         relative to the position angle of the rim's projected major axis, in
         degrees. The first element is seen as the offset for the first-order
         modulation, the second for the second-order modulation, etc.
-    nbase: int
-        Number of baseline length values to consider during the calculation. The
-        required Hankel transforms will then be calculated only for ``nbase`` baseline
-        lengths, and then lineary interpolated to the baseline lenghts corresponding
-        to the given ``u`` and ``v``
+
+    Returns
+    -------
+    array-like
+        Complex visibility samples.
+
+    Notes
+    -----
+    This function does not account for rotation and geometric stretching (e.g. due to
+    inclination). A separate transformation of $uv$ coordinates should account for this.
+    The phase angles of the cosine modulations are defined relative to the
+    spatial y-axis (North), turning counterclockwise to the x-axis (East). This means
+    that a single 1st order modulation with a phase angle of $0 \, \mathrm{deg}$
+    results in a bright peak towards the North, and a faint peak towards the South.
+    A phase angle of $90 \, \mathrm{deg}$ would result in a bright peak towards the
+    East, and a faint one towards the West.
+    """
+    # Add radially symmetric component (order m=0) to beginning of the order arrays.
+    az_amps = np.concatenate([np.array([1.0]), az_amps])
+    az_phis = np.concatenate([np.array([0.0]), az_phis])
+    az_orders = np.arange(az_amps.size)  # Array of the order indices.
+
+    # Change of units.
+    r0_rad = r0 * mas2rad
+    az_phis_rad = az_phis * deg2rad
+
+    # Get length of baseline and baseline projection angle (i.e. counterclockwise angle in
+    # uv-plane, turning from top, i.e. positive v, to left, i.e. positive u).
+    base_norm = np.hypot(u, v)  # In wavelength units (cycles/rad).
+    base_proj_ang_rad = np.arctan2(u, v)  # Baseline projection angle in rad.
+
+    # Maximum order to consider.
+    az_order_max = np.size(az_orders) - 1
+    # Array to evaluate Bessel functions at (shape = (Nb,)).
+    xbes = 2.0 * np.pi * base_norm * r0_rad
+    # Evaluate Bessel function up to max order (shape = (Naz, Nb)).
+    bessel_vals = bessel_jn(az_order_max, xbes)
+
+    # Get the complex visibility term associated with a single azimuthal term.
+    def _get_azmod_cvis_term(az_amp, az_phi_rad, az_order):
+        azmod_cvis_term = (
+            az_amp
+            * np.exp(-0.5j * np.pi * az_order)
+            * np.cos(az_order * (base_proj_ang_rad - az_phi_rad))
+            * bessel_vals[az_order, :]
+        )
+        return azmod_cvis_term
+
+    # vmap over the different azimuthal order evaluations.
+    azmod_cvis_terms = jax.vmap(
+        _get_azmod_cvis_term, in_axes=(0, 0, 0), out_axes=0
+    )(az_amps, az_phis_rad, az_orders)
+    # Sum over all orders.
+    cvis = np.sum(azmod_cvis_terms, axis=0)
+
+    return cvis
+
+
+def cvis_radial_profile_modulated(u, v, rpos, intensity, az_amps, az_phis):
+    r"""Compute the complex visibility for a object whose intensity profiles is
+    separable into a symmetric radial profile and cosine azimuthal modulations,
+    meaning the image intensity can be described in polar image coordinates as
+    $I(r, \theta) = f(r) \left( 1 + \sum_{m=0}^{n} A_m \cos{(m(\theta - \phi_m)}
+    \right)$, where $f(r)$ describes the base radial intensity profile, $A_m$ the
+    amplitude and $\phi_m$ the position phase angle (defined counter-clockwise,
+    North to East) for the m-th order modulation.
+
+    Parameters
+    ----------
+    u : array-like
+        Baseline ``u`` coordinates in wavelength units (cycles / rad).
+    v : array-like
+        Baseline ``v`` coordinates in wavelength units (cycles / rad).
+    rpos : array-like
+        Radial coordinate positions of the radial profile in milliarcseconds.
+    intensity : array-like
+        Radial intensity profile defined at the ``rpos`` positions.
+    az_amps : array-like
+        1D array containing amplitude coefficients for cosine azimuthal modulations.
+        The first element is seen as the amplitude for the first-order modulation,
+        the second as the amplitude for the second-order modulation, etc.
+    az_phis : array-like
+        1D array containing offset angles of the cosine azimuthal modulations,
+        relative to the position angle of the rim's projected major axis, in
+        degrees. The first element is seen as the offset for the first-order
+        modulation, the second for the second-order modulation, etc.
+
+    Returns
+    -------
+    array-like
+        Complex visibility samples.
 
     Notes
     -----
     The radial profile is used in trapezoidal quadrature to calculate the Hankel
     transforms. It's best to make sure that ``rpos`` resolves the radial intensity
-    profile fairly well.
+    profile and your longest expected baseline fairly well.
 
-    This function does not account for rotation or geometric stretching (e.g. due to
+    This function does not account for rotation and geometric stretching (e.g. due to
     inclination). A separate transformation of $uv$ coordinates should account for this.
     The phase angles of the cosine modulations are defined relative to the
     spatial y-axis (North), turning counterclockwise to the x-axis (East). This means
-    that a single 0-th order modulation with a phase angle of $0 \, \mathrm{deg}$
+    that a single 1st order modulation with a phase angle of $0 \, \mathrm{deg}$
     results in a bright peak towards the North, and a faint peak towards the South.
     A phase angle of $90 \, \mathrm{deg}$ would result in a bright peak towards the
     East, and a faint one towards the West.
     """
+    # Add radially symmetric component to beginning of the azimuthal order arrays.
+    az_amps = np.concatenate([np.array([1.0]), az_amps])
+    az_phis = np.concatenate([np.array([0.0]), az_phis])
+    az_orders = np.arange(az_amps.size)  # Array of the order indices.
 
-    # NOTE: maybe you do not wish to calculate the Hankel transform for every single
-    # single UV value here, might just take a subsample and then linearly interpolate
-    # cause it'll be really expensive otherwise
+    # Change of units.
+    az_phis_rad = az_phis * deg2rad
 
-    pass
+    # Get length of baseline and baseline projection angle (i.e. counterclockwise angle in
+    # uv-plane, turning from top, i.e. positive v, to left, i.e. positive u).
+    base_norm = np.hypot(u, v)  # In wavelength units (cycles/rad).
+    base_proj_ang_rad = np.arctan2(u, v)  # Baseline projection angle in rad.
+
+    # Get the complex visibility term associated with a single azimuthal term.
+    def _get_azmod_cvis_term(az_amp, az_phi_rad, az_order):
+        azmod_cvis_term = (
+            az_amp
+            * np.exp(-0.5j * np.pi * az_order)
+            * np.cos(az_order * (base_proj_ang_rad - az_phi_rad))
+            * hankel_n(az_order, base_norm, rpos, intensity)
+        )
+        return azmod_cvis_term
+
+    # vmap over the different azimuthal order evaluations.
+    azmod_cvis_terms = jax.vmap(
+        _get_azmod_cvis_term, in_axes=(0, 0, 0), out_axes=0
+    )(az_amps, az_phis_rad, az_orders)
+    # Sum over all orders.
+    cvis = np.sum(azmod_cvis_terms, axis=0)
+
+    return cvis
 
 
+def spat_freq_elliptical_transf(u, v, pa, stretch):
+    """When considering an ellipticaly rotated and stretched (along the apparent minor
+    axis) object, this function takes spatial frequency coordinates, and transforms
+    them to spatial frequencies in the frame of reference where an elliptical object
+    appears circular and is aligned with the major axis pointing North.
+
+    Parameters
+    ----------
+    u : array-like
+        Baseline ``u`` coordinates in wavelength units.
+    v : array-like
+        Baseline ``v`` coordinates in wavelength units.
+    pa : float or array-like
+        Position angle of the ellipse's projected major axis in degrees, measured North
+        to East (i.e. counter-clockwise in conventional astronomical image orientation)
+        in the original image frame of reference.
+    stretch : float or array-like
+        Factor (typically $< 1.0$) by which the elliptical transform's minor axis in
+        the original image frame of reference.
+
+    Returns
+    -------
+    tuple[array-like, array-like]
+        The $u$ and $v$ spatial frequencies, but in a frame of reference where the
+        rotation and stretch of the original elliptical transformation is undone.
+    """
+    # Change of units.
+    pa_rad = pa * deg2rad
+
+    # Apply rotation matrix and stretch factor (latter for projected minor rim axis)
+    ut = (u * np.cos(pa_rad) - v * np.sin(pa_rad)) / stretch
+    vt = u * np.sin(pa_rad) + v * np.cos(pa_rad)
+
+    return ut, vt
+
+
+# TODO: bessel_jn(n, x) actually returns results for all orders up to the requested one
+# in array of shape (n + 1, shape(x)) due to recursion relation -> make this return
+# the Hankel tranforms up to the nth order instead! They can be calculated in one go!
 @partial(jit, static_argnames=["n"])
-def hankel_n(n, u, v, rpos, intensity):
-    """Function to compute the $n$-th order Hankel transform of given radial intensity
-    profile. For $n=0$, this returns the complex visibility of a centro-symmetric
-    object with the given radial intensity profile.
+def hankel_n(n, base_norm, rpos, intensity):
+    r"""Function to compute the $n$-th order Hankel transform of given radial intensity
+    profile. For $n=0$, this returns the normalized complex visibility of a
+    centro-symmetric object with the given radial intensity profile. The Hankel
+    transform is defined as $H_n = \int f(r) J_n(2\pi \rho r) r \, dr / \int f(r)r \,
+    dr$, with $J_n$ the $n$-th Bessel function of the first kind and $\rho$ the length
+    of the baseline in wavelength units.
 
     Parameters
     ----------
     n : int
         The order of the Hankel transform to calculate.
-    u : array-like
-        Baseline ``u`` coordinates in wavelength units.
-    v : array-like
-        Baseline ``v`` coordinates in wavelength units.
+    base_norm: array-like
+        Length of the baselines in wavelength units (cycles / rad). Passed as a 1D
+        array (different baseline lengths are broadcasted over in the computation).
     rpos : array-like
-        Radial coordinate positions of the radial profile in milliarcseconds.
+        Radial coordinate positions of the radial profile in milliarcseconds. Passed
+        as a 1D array.
     intensity: array-like
-        Radial intensity profile defined at the ``rpos`` positions.
+        Radial intensity profile defined at the ``rpos`` positions. Passed as a 1D
+        array.
 
     Returns
     -------
     array-like
-        $n$-th order Hankel transform evaluated at the specified spatial frequencies
-        ``u`` and ``v``.
+        $n$-th order normalized Hankel transform evaluated at the specified spatial
+        frequencies ``u`` and ``v``. Returned as a 1D array for the given spatial
+        frequencies.
     """
     rpos_rad = rpos * mas2rad  # Put radial positions in radian.
-    base_norm = np.hypot(
-        u, v
-    )  # Baseline norm in wavelength units (cycles/rad).
 
     # Calculate the scalar Hankel transform normalization factor (only needs to be
     # computed once).
@@ -941,10 +1337,6 @@ def hankel_n(n, u, v, rpos, intensity):
     hankel_n = np.trapezoid(integrand_arr, rpos_rad, axis=1) / hankel_fnorm
 
     return hankel_n
-
-
-# TODO: will need an alternative log-like which takes into account parameters being
-# fixed, and also shared accross epochs.
 
 
 def loglike(values, params, data_obj, model_class):
@@ -1260,8 +1652,9 @@ def cp_indices(vis_sta_index, cp_sta_index):
             (cp_sta_index[i][0] == vis_sta_index[:, 0])
             & (cp_sta_index[i][2] == vis_sta_index[:, 1])
         )[0, 0]
+    # Return indices as JAX arrays.
     return (
-        onp.array(i_cps1, dtype=int),
-        onp.array(i_cps2, dtype=int),
-        onp.array(i_cps3, dtype=int),
+        np.array(i_cps1, dtype=int),
+        np.array(i_cps2, dtype=int),
+        np.array(i_cps3, dtype=int),
     )

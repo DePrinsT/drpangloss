@@ -273,17 +273,81 @@ def j0(x):
     )
 
 
+# Modified from Harmonix implementation to return only J0 if called with n=0.
 @partial(jit, static_argnums=0)
 def bessel_jn(n, x):
-    """Compute the Bessel function J_n(x), for n >= 0"""
+    """Compute the Bessel function $J_n(x)$, for $n >= 0$. Returns the function output
+    for all orders up to the requested order $n$ evaluated for the kernel $x$, where the
+    the different orders are stacked along the first axis. The shape of the final result
+    is thus (n + 1, shape(x))."""
+    if n == 0:
+        return jnp.array([j0(x)])
+    else:
+        # use recurrence relations
+        def body(carry, i):
+            jnm1, jn = carry
+            jnplus = (2 * i) / x * jn - jnm1
+            return (jn, jnplus), jnplus
 
-    # use recurrence relations
-    def body(carry, i):
-        jnm1, jn = carry
-        jnplus = (2 * i) / x * jn - jnm1
-        return (jn, jnplus), jnplus
+        j0_val, j1_val = j0(x), j1(x)
+        _, jn = scan(body, (j0_val, j1_val), jnp.arange(1, n))
 
-    j0_val, j1_val = j0(x), j1(x)
-    _, jn = scan(body, (j0_val, j1_val), jnp.arange(1, n))
+        return jnp.concatenate((jnp.array([j0_val]), jnp.array([j1_val]), jn))
 
-    return jnp.concatenate((jnp.array([j0_val]), jnp.array([j1_val]), jn))
+
+# ---
+
+# --- IMAGE UTILITIES ---
+
+
+@partial(jit, static_argnames="ps")
+def img_get_sky_coordinates(img, ps):
+    r"""Calculate the interferometric sky coordinates for a 2D image according to
+    interferometric convention (positive x is towards the left, positive y towards the
+    top). The coordinates are calculated such that $(x,y)=(0,0)$ lies at the geometric
+    center of the image.
+
+    Note that this returns the coordinates of the centers of the pixels, not of
+    the edges. This works for both even and uneven (or mixed) amounts of pixels along
+    the axes, assuming the origin is located at the geometric center of the image.
+
+    Parameters
+    ----------
+    img : array-like
+        The image to calculate coordinates for. Should be a 2D image array.
+    ps : array-like or float
+        The pixelscale of the image in milliarcseconds.
+
+    Returns
+    -------
+    tuple[array-like, array-like]
+        A 1D array with the x-coordinates and a 1D array with the y-coordinates in
+        milliarcseconds.
+
+    Notes
+    -----
+    Note that the image is calculated so the $(x,y) = (0,0)$ point (i.e. the center
+    of the field-of-view) lies at the geometric center of the image. For an odd
+    amount of pixels, this corresponds to the center of the centermost pixel (as
+    plotted using e.g. `plt.imshow()`). For an even amount of pixels, this
+    corresponds to the vertex between the four centermost pixels.
+    """
+    # NOTE: take care with the dimension axis convention of numpy versus that of optical
+    # interferometry. For numpy, the y direction is the first index, the x direction
+    # the second.
+    nx, ny = img.shape[1], img.shape[0]  # number of pixels
+
+    # Calculate on-sky coordinates of pixel centers.
+
+    # NOTE: take care with the coordinate convention of optical interferometry. The
+    # x-coordinate is defined from right to left in the image (from west to east), and
+    # the y-coordinate from bottom to top (south to north). The formulation below works
+    # for both uneven and even amounts of pixels in either dimension (one can also be
+    # even and the other uneven).
+    j = jnp.arange(nx)
+    i = jnp.arange(ny)
+
+    x = -(j - (nx - 1) / 2) * ps
+    y = ((ny - 1) / 2 - i) * ps
+
+    return x, y

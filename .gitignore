@@ -3,5 +3,7 @@ __pycache__/
 .pytest_cache/
 .lint-logs/
 
+/site/
+
 *.egg-info/
 src/drpangloss.egg-info/
