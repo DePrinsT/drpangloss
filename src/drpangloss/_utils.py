@@ -1,6 +1,6 @@
 """Utility functions for wider use in the codebase. The provided Bessel
 functions of the first kind are based on the [CEPHES](https://www.netlib.org/cephes/)
-implementation, and the JAX versions are adopted verbatim from
+implementation, and the JAX versions are adopted (almost) verbatim from
 [Harmonix](https://github.com/shashankdholakia/harmonix)."""
 
 from functools import partial
@@ -10,7 +10,17 @@ from jax import jit
 from jax.lax import scan
 
 
-# --- BESSEL FUNCTIONS OF THE FIRST KIND, BASED ON THE CEPHES IMPLEMENTATION ---
+# === CONSTANTS ===
+RAD2MAS = 180.0 / jnp.pi * 3600.0 * 1000.0  # convert rad to mas
+MAS2RAD = jnp.pi / 180.0 / 3600.0 / 1000.0  # convert mas to rad
+DEG2RAD = jnp.pi / 180.0  # convert deg to rad
+RAD2DEG = 180.0 / jnp.pi  # convert rad to deg
+
+I2PI = 1j * 2.0 * jnp.pi
+# ===
+
+
+# === BESSEL FUNCTIONS OF THE FIRST KIND, BASED ON THE CEPHES IMPLEMENTATION ===
 
 RP1 = jnp.array(
     [
@@ -295,12 +305,12 @@ def bessel_jn(n, x):
         return jnp.concatenate((jnp.array([j0_val]), jnp.array([j1_val]), jn))
 
 
-# ---
+# ===
 
-# --- IMAGE UTILITIES ---
+# === IMAGE CALCULATION/TRANSFORMATION UTILITIES ===
 
 
-@partial(jit, static_argnames="ps")
+@partial(jit)
 def img_get_sky_coordinates(img, ps):
     r"""Calculate the interferometric sky coordinates for a 2D image according to
     interferometric convention (positive x is towards the left, positive y towards the
@@ -351,3 +361,78 @@ def img_get_sky_coordinates(img, ps):
     y = ((ny - 1) / 2 - i) * ps
 
     return x, y
+
+
+def undo_elliptical_transf_spat_freq(u, v, pa, stretch):
+    """When considering an ellipticaly rotated and stretched (along the apparent minor
+    axis) object, this function takes spatial frequency coordinates, and transforms
+    them to spatial frequencies in the frame of reference where an elliptical object
+    appears circular and is aligned with the major axis pointing North.
+
+    Parameters
+    ----------
+    u : array-like
+        Baseline ``u`` coordinates in wavelength units.
+    v : array-like
+        Baseline ``v`` coordinates in wavelength units.
+    pa : float or array-like
+        Position angle of the ellipse's projected major axis in degrees, measured North
+        to East (i.e. counter-clockwise in conventional astronomical image orientation)
+        in the original image frame of reference.
+    stretch : float or array-like
+        Factor (typically $< 1.0$) by which the elliptical transform's minor axis is
+        stretched in the original image frame of reference.
+
+    Returns
+    -------
+    tuple[array-like, array-like]
+        The $u$ and $v$ spatial frequencies, but in a frame of reference where the
+        rotation and stretch of the original elliptical transformation is undone.
+    """
+    # Change of units.
+    pa_rad = pa * DEG2RAD
+
+    # Apply rotation matrix and stretch factor (latter for projected minor rim axis).
+    ut = (u * jnp.cos(pa_rad) - v * jnp.sin(pa_rad)) / stretch
+    vt = u * jnp.sin(pa_rad) + v * jnp.cos(pa_rad)
+
+    return ut, vt
+
+
+def undo_elliptical_transf_coord(x, y, pa, stretch):
+    """When considering an ellipticaly rotated and stretched (along the apparent minor
+    axis) object, this function takes spatial coordinates, and transforms
+    them to coordinates in the frame of reference where the elliptical object
+    appears circular and is aligned with the major axis pointing North.
+
+    Parameters
+    ----------
+    x : array-like
+        Spatial coordinates along the x-axis
+    y : array-like
+        Spatial coordinates along the y-axis
+    pa : float or array-like
+        Position angle of the ellipse's projected major axis in degrees, measured North
+        to East (i.e. counter-clockwise in conventional astronomical image orientation)
+        in the original image frame of reference.
+    stretch : float or array-like
+        Factor (typically $< 1.0$) by which the elliptical transform's minor axis is
+        stretched in the original image frame of reference.
+
+    Returns
+    -------
+    tuple[array-like, array-like]
+        The $x$ and $y$ spatial coordinates, but in a frame of reference where the
+        rotation and stretch of the original elliptical transformation is undone.
+    """
+    # Change of units.
+    pa_rad = pa * DEG2RAD
+
+    # Apply rotation matrix and stretch factor.
+    xt = (x * jnp.cos(pa_rad) - y * jnp.sin(pa_rad)) / stretch
+    yt = x * jnp.sin(pa_rad) + y * jnp.cos(pa_rad)
+
+    return xt, yt
+
+
+# ===

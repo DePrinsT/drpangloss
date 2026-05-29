@@ -7,6 +7,7 @@ from matplotlib.ticker import FuncFormatter
 
 matplotlib.rcParams["figure.dpi"] = 100
 matplotlib.rcParams["font.family"] = ["serif"]
+plt.rcParams.update({"mathtext.default": "regular"})
 plt.rcParams.update({"font.size": 14})
 
 """

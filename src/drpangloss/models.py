@@ -2,24 +2,24 @@ from functools import partial
 
 import equinox as eqx
 import jax
-import jax.numpy as np
-import numpy as onp
+import jax.numpy as jnp
+import numpy as np
 import zodiax as zx
-from jax import jit
+from jax.scipy.signal import fftconvolve
 
-from ._utils import bessel_jn
+from ._utils import (
+    DEG2RAD,
+    I2PI,
+    MAS2RAD,
+    bessel_jn,
+    img_get_sky_coordinates,
+    undo_elliptical_transf_coord,
+    undo_elliptical_transf_spat_freq,
+)
 from .inference import (
     fisher_matrix as _fisher_matrix,
     laplace_covariance as _laplace_covariance,
 )
-
-
-rad2mas = 180.0 / np.pi * 3600.0 * 1000.0  # convert rad to mas
-mas2rad = np.pi / 180.0 / 3600.0 / 1000.0  # convert mas to rad
-deg2rad = np.pi / 180.0  # convert deg to rad
-rad2deg = 180.0 / np.pi  # convert rad to deg
-
-i2pi = 1j * 2.0 * np.pi
 
 
 class OIData(zx.Base):
@@ -93,7 +93,7 @@ class OIData(zx.Base):
                 self.i_cps1,
                 self.i_cps2,
                 self.i_cps3,
-            ) = (np.array([], dtype=float),) * 10
+            ) = (jnp.array([], dtype=float),) * 10
 
             # loop over wavelength solution HDUs and find corresponding
             # visibilities/phases based on INSNAME header keyword.
@@ -102,7 +102,7 @@ class OIData(zx.Base):
             ]
             for hdu_wave in hdu_wave_list:
                 # get wavelength solution as 1D array.
-                wavel_sol = np.array(hdu_wave.data["EFF_WAVE"], dtype=float)
+                wavel_sol = jnp.array(hdu_wave.data["EFF_WAVE"], dtype=float)
                 insname = hdu_wave.header["INSNAME"]
                 # get number of previously loaded visibility measurements
                 nvis_old = self.vis.size
@@ -137,33 +137,33 @@ class OIData(zx.Base):
                 if len(hdu_vis2_list) != 0:
                     # Add data to 1D array attributes.
                     hdu_vis = hdu_vis2_list[0]
-                    vis_arr = np.array(hdu_vis.data["VIS2DATA"], dtype=float)
-                    d_vis_arr = np.array(hdu_vis.data["VIS2ERR"], dtype=float)
-                    self.vis = np.concatenate((self.vis, vis_arr.flatten()))
-                    self.d_vis = np.concatenate(
+                    vis_arr = jnp.array(hdu_vis.data["VIS2DATA"], dtype=float)
+                    d_vis_arr = jnp.array(hdu_vis.data["VIS2ERR"], dtype=float)
+                    self.vis = jnp.concatenate((self.vis, vis_arr.flatten()))
+                    self.d_vis = jnp.concatenate(
                         (
                             self.d_vis,
                             d_vis_arr.flatten(),
                         )
                     )
-                    self.wavel = np.concatenate(
+                    self.wavel = jnp.concatenate(
                         (
                             self.wavel,
-                            np.tile(wavel_sol, vis_arr.shape[0]),
+                            jnp.tile(wavel_sol, vis_arr.shape[0]),
                         )
                     )
-                    u = np.array(hdu_vis.data["UCOORD"], dtype=float)
-                    v = np.array(hdu_vis.data["VCOORD"], dtype=float)
-                    self.u = np.concatenate(
+                    u = jnp.array(hdu_vis.data["UCOORD"], dtype=float)
+                    v = jnp.array(hdu_vis.data["VCOORD"], dtype=float)
+                    self.u = jnp.concatenate(
                         (
                             self.u,
-                            np.repeat(u, wavel_sol.size),
+                            jnp.repeat(u, wavel_sol.size),
                         )
                     )
-                    self.v = np.concatenate(
+                    self.v = jnp.concatenate(
                         (
                             self.v,
-                            np.repeat(v, wavel_sol.size),
+                            jnp.repeat(v, wavel_sol.size),
                         )
                     )
 
@@ -184,33 +184,33 @@ class OIData(zx.Base):
                         if "VISAMPERR" in hdu_vis.data.names
                         else "VISERR"
                     )
-                    vis_arr = np.array(hdu_vis.data[vis_key], dtype=float)
-                    d_vis_arr = np.array(hdu_vis.data[d_vis_key], dtype=float)
-                    self.vis = np.concatenate((self.vis, vis_arr.flatten()))
-                    self.d_vis = np.concatenate(
+                    vis_arr = jnp.array(hdu_vis.data[vis_key], dtype=float)
+                    d_vis_arr = jnp.array(hdu_vis.data[d_vis_key], dtype=float)
+                    self.vis = jnp.concatenate((self.vis, vis_arr.flatten()))
+                    self.d_vis = jnp.concatenate(
                         (
                             self.d_vis,
                             d_vis_arr.flatten(),
                         )
                     )
-                    self.wavel = np.concatenate(
+                    self.wavel = jnp.concatenate(
                         (
                             self.wavel,
-                            np.tile(wavel_sol, vis_arr.shape[0]),
+                            jnp.tile(wavel_sol, vis_arr.shape[0]),
                         )
                     )
-                    u = np.array(hdu_vis.data["UCOORD"], dtype=float)
-                    v = np.array(hdu_vis.data["VCOORD"], dtype=float)
-                    self.u = np.concatenate(
+                    u = jnp.array(hdu_vis.data["UCOORD"], dtype=float)
+                    v = jnp.array(hdu_vis.data["VCOORD"], dtype=float)
+                    self.u = jnp.concatenate(
                         (
                             self.u,
-                            np.repeat(u, wavel_sol.size),
+                            jnp.repeat(u, wavel_sol.size),
                         )
                     )
-                    self.v = np.concatenate(
+                    self.v = jnp.concatenate(
                         (
                             self.v,
-                            np.repeat(v, wavel_sol.size),
+                            jnp.repeat(v, wavel_sol.size),
                         )
                     )
 
@@ -230,12 +230,12 @@ class OIData(zx.Base):
                     and hdu_vis_list[0].header["PHITYP"] == "absolute"
                 ):
                     hdu_phi = hdu_vis_list[0]
-                    phi_arr = np.array(hdu_phi.data["VISPHI"], dtype=float)
-                    d_phi_arr = np.array(
+                    phi_arr = jnp.array(hdu_phi.data["VISPHI"], dtype=float)
+                    d_phi_arr = jnp.array(
                         hdu_phi.data["VISPHIERR"], dtype=float
                     )
-                    self.phi = np.concatenate((self.phi, phi_arr.flatten()))
-                    self.d_phi = np.concatenate(
+                    self.phi = jnp.concatenate((self.phi, phi_arr.flatten()))
+                    self.d_phi = jnp.concatenate(
                         (
                             self.d_phi,
                             d_phi_arr.flatten(),
@@ -246,23 +246,25 @@ class OIData(zx.Base):
                     self.cp_flag = False
                 elif len(hdu_t3_list) != 0:
                     hdu_phi = hdu_t3_list[0]
-                    phi_arr = np.array(hdu_phi.data["T3PHI"], dtype=float)
-                    d_phi_arr = np.array(hdu_phi.data["T3PHIERR"], dtype=float)
-                    self.phi = np.concatenate((self.phi, phi_arr.flatten()))
-                    self.d_phi = np.concatenate(
+                    phi_arr = jnp.array(hdu_phi.data["T3PHI"], dtype=float)
+                    d_phi_arr = jnp.array(
+                        hdu_phi.data["T3PHIERR"], dtype=float
+                    )
+                    self.phi = jnp.concatenate((self.phi, phi_arr.flatten()))
+                    self.d_phi = jnp.concatenate(
                         (
                             self.d_phi,
                             d_phi_arr.flatten(),
                         )
                     )
-                    cp_sta_index = np.array(
+                    cp_sta_index = jnp.array(
                         hdu_phi.data["STA_INDEX"], dtype=int
                     )
 
                     # get indices of the baselines of the corresponding visibility
                     # measurements (i.e. index of the corresponding value in self.vis).
                     # We separately account for number of wavelength channels and
-                    # previously loaded measurements below
+                    # previously loaded measurements below.
                     i_cps1, i_cps2, i_cps3 = cp_indices(
                         vis_sta_index, cp_sta_index
                     )
@@ -274,7 +276,7 @@ class OIData(zx.Base):
 
                     # squeeze in channel offsets with broadcasting and account for
                     # previously loaded visibility measurments
-                    i_wave_offsets = np.arange(0, wavel_sol.size)[
+                    i_wave_offsets = jnp.arange(0, wavel_sol.size)[
                         None, :
                     ]  # squeeze in channel offsets (shape (1, Nw))
                     i_cps1 = (
@@ -287,14 +289,14 @@ class OIData(zx.Base):
                         i_cps3[:, None] + i_wave_offsets
                     ).ravel() + nvis_old
 
-                    self.i_cps1 = np.concatenate((self.i_cps1, i_cps1))
-                    self.i_cps2 = np.concatenate((self.i_cps2, i_cps2))
-                    self.i_cps3 = np.concatenate((self.i_cps3, i_cps3))
+                    self.i_cps1 = jnp.concatenate((self.i_cps1, i_cps1))
+                    self.i_cps2 = jnp.concatenate((self.i_cps2, i_cps2))
+                    self.i_cps3 = jnp.concatenate((self.i_cps3, i_cps3))
 
                     # make sure the indices are integer
-                    self.i_cps1 = np.astype(self.i_cps1, int)
-                    self.i_cps2 = np.astype(self.i_cps2, int)
-                    self.i_cps3 = np.astype(self.i_cps3, int)
+                    self.i_cps1 = jnp.astype(self.i_cps1, int)
+                    self.i_cps2 = jnp.astype(self.i_cps2, int)
+                    self.i_cps3 = jnp.astype(self.i_cps3, int)
 
                     self.cp_flag = True
                 else:
@@ -307,15 +309,15 @@ class OIData(zx.Base):
             # assume data is a dict of the form {'u':u,'v':v,'wavel':wavel,'vis':vis,'d_vis':d_vis,
             #'phi':phi,'d_phi':d_phi,'i_cps1':i_cps1,'i_cps2':i_cps2,'i_cps3':i_cps3,'v2_flag':v2_flag,'cp_flag':cp_flag}
 
-            self.u = np.array(data["u"], dtype=float)
-            self.v = np.array(data["v"], dtype=float)
-            self.wavel = np.array(data["wavel"], dtype=float)
+            self.u = jnp.array(data["u"], dtype=float)
+            self.v = jnp.array(data["v"], dtype=float)
+            self.wavel = jnp.array(data["wavel"], dtype=float)
 
-            self.vis = np.array(data["vis"], dtype=float)
-            self.d_vis = np.array(data["d_vis"], dtype=float)
+            self.vis = jnp.array(data["vis"], dtype=float)
+            self.d_vis = jnp.array(data["d_vis"], dtype=float)
 
-            self.phi = np.array(data["phi"], dtype=float)
-            self.d_phi = np.array(data["d_phi"], dtype=float)
+            self.phi = jnp.array(data["phi"], dtype=float)
+            self.d_phi = jnp.array(data["d_phi"], dtype=float)
 
             try:
                 idx1 = data["i_cps1"]
@@ -323,9 +325,9 @@ class OIData(zx.Base):
                 idx3 = data["i_cps3"]
                 if idx1 is None or idx2 is None or idx3 is None:
                     raise KeyError
-                self.i_cps1 = np.array(idx1, dtype=int)
-                self.i_cps2 = np.array(idx2, dtype=int)
-                self.i_cps3 = np.array(idx3, dtype=int)
+                self.i_cps1 = jnp.array(idx1, dtype=int)
+                self.i_cps2 = jnp.array(idx2, dtype=int)
+                self.i_cps3 = jnp.array(idx3, dtype=int)
             except KeyError:
                 self.i_cps1 = None
                 self.i_cps2 = None
@@ -348,7 +350,7 @@ class OIData(zx.Base):
         """
         Flatten closure phases and uncertainties.
         """
-        return np.concatenate([self.vis, self.phi]), np.concatenate(
+        return jnp.concatenate([self.vis, self.phi]), jnp.concatenate(
             [
                 self.d_vis,
                 self.d_phi,
@@ -387,16 +389,16 @@ class OIData(zx.Base):
             convention/order as ``flatten_data``.
         """
 
-        return np.concatenate([self.to_vis(cvis), self.to_phases(cvis)])
+        return jnp.concatenate([self.to_vis(cvis), self.to_phases(cvis)])
 
     def to_vis(self, cvis):
         """
         Convert complex visibilities to visibilities or squared visibilities.
         """
         if self.v2_flag:
-            return np.abs(cvis) ** 2
+            return jnp.abs(cvis) ** 2
         else:
-            return np.abs(cvis)
+            return jnp.abs(cvis)
 
     def to_phases(self, cvis):
         """
@@ -405,7 +407,7 @@ class OIData(zx.Base):
         if self.cp_flag:
             return closure_phases(cvis, self.i_cps1, self.i_cps2, self.i_cps3)
         else:
-            return np.rad2deg(np.angle(cvis))
+            return jnp.rad2deg(jnp.angle(cvis))
 
     def model(self, model_object):
         """
@@ -454,9 +456,9 @@ class BinaryModelAngular(zx.Base):
 
         """
 
-        self.sep = np.asarray(sep, dtype=float)
-        self.pa = np.asarray(pa, dtype=float)
-        self.contrast = np.asarray(contrast, dtype=float)
+        self.sep = jnp.asarray(sep, dtype=float)
+        self.pa = jnp.asarray(pa, dtype=float)
+        self.contrast = jnp.asarray(contrast, dtype=float)
 
     def __repr__(self):
         """Return a readable representation of binary angular parameters."""
@@ -533,9 +535,9 @@ class BinaryModelCartesian(zx.Base):
 
         """
 
-        self.dra = np.asarray(dra, dtype=float)
-        self.ddec = np.asarray(ddec, dtype=float)
-        self.flux = np.asarray(flux, dtype=float)
+        self.dra = jnp.asarray(dra, dtype=float)
+        self.ddec = jnp.asarray(ddec, dtype=float)
+        self.flux = jnp.asarray(flux, dtype=float)
 
     def __repr__(self):
         """Return a readable representation of binary Cartesian parameters."""
@@ -722,21 +724,21 @@ class BinaryGaussianRimModel(zx.Base):
             Wavelength at which the total flux fractions are defined in meters. Note
             that this is not a free parameter, but is just fixed at initialization.
         """
-        self.flux_p = np.asarray(flux_p, dtype=float)
-        self.dra_p = np.asarray(dra_p, dtype=float)
-        self.ddec_p = np.asarray(ddec_p, dtype=float)
-        self.si_p = np.asarray(si_p, dtype=float)
-        self.flux_s = np.asarray(flux_s, dtype=float)
-        self.dra_s = np.asarray(dra_s, dtype=float)
-        self.ddec_s = np.asarray(ddec_s, dtype=float)
-        self.diam_rim = np.asarray(diam_rim, dtype=float)
-        self.fwhm_rim = np.asarray(fwhm_rim, dtype=float)
-        self.inc_rim = np.asarray(inc_rim, dtype=float)
-        self.pa_rim = np.asarray(pa_rim, dtype=float)
-        self.si_rim = np.asarray(si_rim, dtype=float)
-        self.flux_bkg = np.asarray(flux_bkg, dtype=float)
-        self.az_amps = np.asarray(az_amps, dtype=float)
-        self.az_phis = np.asarray(az_phis, dtype=float)
+        self.flux_p = jnp.asarray(flux_p, dtype=float)
+        self.dra_p = jnp.asarray(dra_p, dtype=float)
+        self.ddec_p = jnp.asarray(ddec_p, dtype=float)
+        self.si_p = jnp.asarray(si_p, dtype=float)
+        self.flux_s = jnp.asarray(flux_s, dtype=float)
+        self.dra_s = jnp.asarray(dra_s, dtype=float)
+        self.ddec_s = jnp.asarray(ddec_s, dtype=float)
+        self.diam_rim = jnp.asarray(diam_rim, dtype=float)
+        self.fwhm_rim = jnp.asarray(fwhm_rim, dtype=float)
+        self.inc_rim = jnp.asarray(inc_rim, dtype=float)
+        self.pa_rim = jnp.asarray(pa_rim, dtype=float)
+        self.si_rim = jnp.asarray(si_rim, dtype=float)
+        self.flux_bkg = jnp.asarray(flux_bkg, dtype=float)
+        self.az_amps = jnp.asarray(az_amps, dtype=float)
+        self.az_phis = jnp.asarray(az_phis, dtype=float)
         self.wave0 = float(wave0)
 
     def __repr__(self):
@@ -817,17 +819,17 @@ class BinaryGaussianRimModel(zx.Base):
             self.az_phis,
         )
         # Complex visibilities for binary components.
-        dra_p_rad, ddec_p_rad = self.dra_p * mas2rad, self.ddec_p * mas2rad
-        dra_s_rad, ddec_s_rad = self.dra_s * mas2rad, self.ddec_s * mas2rad
-        cvis_p = np.exp(-i2pi * (uu * dra_p_rad + vv * ddec_p_rad))
-        cvis_s = np.exp(-i2pi * (uu * dra_s_rad + vv * ddec_s_rad))
+        dra_p_rad, ddec_p_rad = self.dra_p * MAS2RAD, self.ddec_p * MAS2RAD
+        dra_s_rad, ddec_s_rad = self.dra_s * MAS2RAD, self.ddec_s * MAS2RAD
+        cvis_p = jnp.exp(-I2PI * (uu * dra_p_rad + vv * ddec_p_rad))
+        cvis_s = jnp.exp(-I2PI * (uu * dra_s_rad + vv * ddec_s_rad))
 
         # Calculate spectra for each component.
         flux_rim = 1 - self.flux_p - self.flux_s - self.flux_bkg
         spec_rim = flux_rim * (wavel / self.wave0) ** self.si_rim
         spec_p = self.flux_p * (wavel / self.wave0) ** self.si_p
-        spec_s = np.ones_like(spec_rim) * self.flux_s
-        spec_bkg = np.ones_like(spec_rim) * self.flux_bkg
+        spec_s = jnp.ones_like(spec_rim) * self.flux_s
+        spec_bkg = jnp.ones_like(spec_rim) * self.flux_bkg
 
         # Combine into spectral-weighted total complex visibility.
         cvis_tot = (
@@ -837,9 +839,11 @@ class BinaryGaussianRimModel(zx.Base):
         return cvis_tot
 
     # TODO: implement
-    def get_img(npix, ps):
+    @partial(jax.jit, static_argnames="npix")
+    def get_img(self, npix, ps):
         """Get an image of the model rim intensity. The returned image is normalized
-        so the sum of the intensity value over all pixels is one.
+        so the sum of the intensity value over all pixels is one. The rim center is
+        placed in the middle of the image.
 
         Parameters
         ----------
@@ -856,14 +860,69 @@ class BinaryGaussianRimModel(zx.Base):
 
         Notes
         -----
-        Note that the image is calculated so the $(x,y) = (0,0)$ point (i.e. the center
+        * Note that the image is calculated so the $(x,y) = (0,0)$ point (i.e. the center
         of the field-of-view) lies at the geometric center of the image. For an odd
         amount of pixels, this corresponds to the center of the centermost pixel (as
         plotted using e.g. `plt.imshow()`). For an even amount of pixels, this
         corresponds to the vertex between the four centermost pixels.
+
+        * Since this image is calculated numerically, it is a good idea to have
+        a small pixelscale relative to the expected rim  (e.g. a factor of 10).
+        The user should take into account the expected FWHM of the rim and the expected
+        azimuthal modulations to avoid artefacts.
         """
-        # img = np.zeros(npix, npix)  # Initialize empty image
-        pass
+        # Add radially symmetric component (order m=0) to beginning of the order arrays.
+        az_amps = jnp.concatenate([jnp.array([1.0]), self.az_amps])
+        az_phis = jnp.concatenate([jnp.array([0.0]), self.az_phis])
+        az_orders = jnp.arange(az_amps.size)  # Array of the order indices.
+
+        # Change of units.
+        az_phis_rad = az_phis * DEG2RAD
+
+        # Initialize empty image & get 1D coordinates of shape (npix,)
+        img_zeros = jnp.zeros((npix, npix))
+        xflat, yflat = img_get_sky_coordinates(img_zeros, ps=ps)
+
+        # Get 2D meshgrid of coordinates & transform to frame where elliptical ring is
+        # derotated and unstretched (i.e. elliptical coordinates).
+        xmesh, ymesh = jnp.meshgrid(xflat, yflat)
+        rmesh = jnp.hypot(xmesh, ymesh)
+
+        stretch = jnp.maximum(
+            jnp.cos(self.inc_rim * DEG2RAD), 1e-8
+        )  # Doesn't explode at i=90 deg.
+        xmesh_ell, ymesh_ell = undo_elliptical_transf_coord(
+            xmesh,
+            ymesh,
+            pa=self.pa_rim,
+            stretch=stretch,
+        )
+        rmesh_ell = jnp.hypot(xmesh_ell, ymesh_ell)  # Elliptical coord radius.
+        thetamesh_ell = jnp.arctan2(
+            xmesh_ell, ymesh_ell
+        )  # Elliptical coord position angle.
+
+        # Create a boolen mask to select pixels closest to the actual thin ellipse rim.
+        mask = jnp.abs(rmesh_ell - self.diam_rim / 2) <= (ps)
+        img = jnp.where(mask, 1.0, img_zeros)
+
+        # Apply azimuthal modulation terms.
+        f = lambda az_amp, az_phi_rad, az_order: (
+            az_amp * jnp.cos(az_order * (thetamesh_ell - az_phi_rad))
+        )
+
+        # Apply azimuthal modulations.
+        az_factors = jax.vmap(f)(az_amps, az_phis_rad, az_orders)
+        img = img * jnp.sum(az_factors, axis=0)
+
+        # Apply Gaussian convolution
+        sigma = self.fwhm_rim / (2 * jnp.sqrt(2 * jnp.log(2)))
+        img_gauss = (
+            1 / (2 * jnp.pi * sigma**2) * jnp.exp(-(rmesh**2) / (2 * sigma**2))
+        )
+        img = fftconvolve(img, img_gauss, mode="same")
+
+        return img / jnp.sum(img)
 
     # TODO: implement
     def calc_img_intensity(x, y):
@@ -916,17 +975,17 @@ def cvis_binary_angular(u, v, sep, pa, contrast):
 
     # normalize visibilities so total power is 1
 
-    th = pa * deg2rad
+    th = pa * DEG2RAD
 
-    ddec = mas2rad * (sep * np.cos(th))
-    dra = -1 * mas2rad * (sep * np.sin(th))
+    ddec = MAS2RAD * (sep * jnp.cos(th))
+    dra = -1 * MAS2RAD * (sep * jnp.sin(th))
 
     # decompose into two "luminosity"
     l2 = 1.0 / (contrast + 1)
     l1 = 1 - l2
 
     # phase-factor
-    phi = np.exp(-i2pi * (u * dra + v * ddec))
+    phi = jnp.exp(-I2PI * (u * dra + v * ddec))
     cvis = l1 + l2 * phi
 
     return cvis
@@ -962,10 +1021,10 @@ def cvis_binary(u, v, ddec, dra, planet):
     p2 = planet / (star + planet)
 
     # relative locations
-    ddec = ddec * np.pi / (180.0 * 3600.0 * 1000.0)
-    dra = dra * np.pi / (180.0 * 3600.0 * 1000.0)
-    phi_r = np.cos(-2 * np.pi * (u * dra + v * ddec))
-    phi_i = np.sin(-2 * np.pi * (u * dra + v * ddec))
+    ddec = ddec * jnp.pi / (180.0 * 3600.0 * 1000.0)
+    dra = dra * jnp.pi / (180.0 * 3600.0 * 1000.0)
+    phi_r = jnp.cos(-2 * jnp.pi * (u * dra + v * ddec))
+    phi_i = jnp.sin(-2 * jnp.pi * (u * dra + v * ddec))
 
     cvis = p3 + p2 * phi_r + p2 * phi_i * 1.0j
 
@@ -995,14 +1054,15 @@ def cvis_gaussian(u, v, fwhm):
     inclination). A separate transformation of $uv$ coordinates should account for this.
     """
     # Change of units.
-    fwhm_rad = fwhm * mas2rad
+    fwhm_rad = fwhm * MAS2RAD
 
     # Baseline norm.
-    base_norm = np.hypot(u, v)  # In wavelength units (cycles/rad).
+    base_norm = jnp.hypot(u, v)  # In wavelength units (cycles/rad).
 
     # Calculate complex visibility (forced to be complex).
     cvis = (
-        np.exp(-(np.pi**2) * fwhm_rad**2 * base_norm**2 / (4 * np.log(2))) + 0j
+        jnp.exp(-(jnp.pi**2) * fwhm_rad**2 * base_norm**2 / (4 * jnp.log(2)))
+        + 0j
     )
 
     return cvis
@@ -1048,17 +1108,17 @@ def cvis_gaussian_rim(u, v, dra, ddec, diam, fwhm, inc, pa, az_amps, az_phis):
     """
     # Relevant changes of units
     inc_rad, dra_rad, ddec_rad = (
-        inc * deg2rad,
-        dra * mas2rad,
-        ddec * mas2rad,
+        inc * DEG2RAD,
+        dra * MAS2RAD,
+        ddec * MAS2RAD,
     )
 
     # Transform spatial frequency coordinates to frame of reference where the model rim
     # is uninclined and the major axis is pointed North (postitive y-axis).
-    stretch_factor = np.maximum(
-        np.cos(inc_rad), 1e-8
+    stretch_factor = jnp.maximum(
+        jnp.cos(inc_rad), 1e-8
     )  # Doesn't explode at i=90 deg.
-    ut, vt = spat_freq_elliptical_transf(u, v, pa, stretch_factor)
+    ut, vt = undo_elliptical_transf_spat_freq(u, v, pa, stretch_factor)
 
     # Compute complex visibilities for Dirac delta (infinitely thin) modulated ring.
     cvis = cvis_radial_dirac_delta_modulated(
@@ -1068,7 +1128,7 @@ def cvis_gaussian_rim(u, v, dra, ddec, diam, fwhm, inc, pa, az_amps, az_phis):
     # FWHM in the original image frame of reference.
     cvis *= cvis_gaussian(u, v, fwhm)
     # Apply offset phase-factor.
-    phi = np.exp(-i2pi * (u * dra_rad + v * ddec_rad))
+    phi = jnp.exp(-I2PI * (u * dra_rad + v * ddec_rad))
     cvis *= phi
 
     return cvis
@@ -1123,23 +1183,23 @@ def cvis_radial_dirac_delta_modulated(u, v, r0, az_amps, az_phis):
     East, and a faint one towards the West.
     """
     # Add radially symmetric component (order m=0) to beginning of the order arrays.
-    az_amps = np.concatenate([np.array([1.0]), az_amps])
-    az_phis = np.concatenate([np.array([0.0]), az_phis])
-    az_orders = np.arange(az_amps.size)  # Array of the order indices.
+    az_amps = jnp.concatenate([jnp.array([1.0]), az_amps])
+    az_phis = jnp.concatenate([jnp.array([0.0]), az_phis])
+    az_orders = jnp.arange(az_amps.size)  # Array of the order indices.
 
     # Change of units.
-    r0_rad = r0 * mas2rad
-    az_phis_rad = az_phis * deg2rad
+    r0_rad = r0 * MAS2RAD
+    az_phis_rad = az_phis * DEG2RAD
 
     # Get length of baseline and baseline projection angle (i.e. counterclockwise angle in
     # uv-plane, turning from top, i.e. positive v, to left, i.e. positive u).
-    base_norm = np.hypot(u, v)  # In wavelength units (cycles/rad).
-    base_proj_ang_rad = np.arctan2(u, v)  # Baseline projection angle in rad.
+    base_norm = jnp.hypot(u, v)  # In wavelength units (cycles/rad).
+    base_proj_ang_rad = jnp.arctan2(u, v)  # Baseline projection angle in rad.
 
     # Maximum order to consider.
-    az_order_max = np.size(az_orders) - 1
+    az_order_max = jnp.size(az_orders) - 1
     # Array to evaluate Bessel functions at (shape = (Nb,)).
-    xbes = 2.0 * np.pi * base_norm * r0_rad
+    xbes = 2.0 * jnp.pi * base_norm * r0_rad
     # Evaluate Bessel function up to max order (shape = (Naz, Nb)).
     bessel_vals = bessel_jn(az_order_max, xbes)
 
@@ -1147,8 +1207,8 @@ def cvis_radial_dirac_delta_modulated(u, v, r0, az_amps, az_phis):
     def _get_azmod_cvis_term(az_amp, az_phi_rad, az_order):
         azmod_cvis_term = (
             az_amp
-            * np.exp(-0.5j * np.pi * az_order)
-            * np.cos(az_order * (base_proj_ang_rad - az_phi_rad))
+            * jnp.exp(-0.5j * jnp.pi * az_order)
+            * jnp.cos(az_order * (base_proj_ang_rad - az_phi_rad))
             * bessel_vals[az_order, :]
         )
         return azmod_cvis_term
@@ -1158,7 +1218,7 @@ def cvis_radial_dirac_delta_modulated(u, v, r0, az_amps, az_phis):
         _get_azmod_cvis_term, in_axes=(0, 0, 0), out_axes=0
     )(az_amps, az_phis_rad, az_orders)
     # Sum over all orders.
-    cvis = np.sum(azmod_cvis_terms, axis=0)
+    cvis = jnp.sum(azmod_cvis_terms, axis=0)
 
     return cvis
 
@@ -1213,24 +1273,24 @@ def cvis_radial_profile_modulated(u, v, rpos, intensity, az_amps, az_phis):
     East, and a faint one towards the West.
     """
     # Add radially symmetric component to beginning of the azimuthal order arrays.
-    az_amps = np.concatenate([np.array([1.0]), az_amps])
-    az_phis = np.concatenate([np.array([0.0]), az_phis])
-    az_orders = np.arange(az_amps.size)  # Array of the order indices.
+    az_amps = jnp.concatenate([jnp.array([1.0]), az_amps])
+    az_phis = jnp.concatenate([jnp.array([0.0]), az_phis])
+    az_orders = jnp.arange(az_amps.size)  # Array of the order indices.
 
     # Change of units.
-    az_phis_rad = az_phis * deg2rad
+    az_phis_rad = az_phis * DEG2RAD
 
     # Get length of baseline and baseline projection angle (i.e. counterclockwise angle in
     # uv-plane, turning from top, i.e. positive v, to left, i.e. positive u).
-    base_norm = np.hypot(u, v)  # In wavelength units (cycles/rad).
-    base_proj_ang_rad = np.arctan2(u, v)  # Baseline projection angle in rad.
+    base_norm = jnp.hypot(u, v)  # In wavelength units (cycles/rad).
+    base_proj_ang_rad = jnp.arctan2(u, v)  # Baseline projection angle in rad.
 
     # Get the complex visibility term associated with a single azimuthal term.
     def _get_azmod_cvis_term(az_amp, az_phi_rad, az_order):
         azmod_cvis_term = (
             az_amp
-            * np.exp(-0.5j * np.pi * az_order)
-            * np.cos(az_order * (base_proj_ang_rad - az_phi_rad))
+            * jnp.exp(-0.5j * jnp.pi * az_order)
+            * jnp.cos(az_order * (base_proj_ang_rad - az_phi_rad))
             * hankel_n(az_order, base_norm, rpos, intensity)
         )
         return azmod_cvis_term
@@ -1240,51 +1300,15 @@ def cvis_radial_profile_modulated(u, v, rpos, intensity, az_amps, az_phis):
         _get_azmod_cvis_term, in_axes=(0, 0, 0), out_axes=0
     )(az_amps, az_phis_rad, az_orders)
     # Sum over all orders.
-    cvis = np.sum(azmod_cvis_terms, axis=0)
+    cvis = jnp.sum(azmod_cvis_terms, axis=0)
 
     return cvis
-
-
-def spat_freq_elliptical_transf(u, v, pa, stretch):
-    """When considering an ellipticaly rotated and stretched (along the apparent minor
-    axis) object, this function takes spatial frequency coordinates, and transforms
-    them to spatial frequencies in the frame of reference where an elliptical object
-    appears circular and is aligned with the major axis pointing North.
-
-    Parameters
-    ----------
-    u : array-like
-        Baseline ``u`` coordinates in wavelength units.
-    v : array-like
-        Baseline ``v`` coordinates in wavelength units.
-    pa : float or array-like
-        Position angle of the ellipse's projected major axis in degrees, measured North
-        to East (i.e. counter-clockwise in conventional astronomical image orientation)
-        in the original image frame of reference.
-    stretch : float or array-like
-        Factor (typically $< 1.0$) by which the elliptical transform's minor axis in
-        the original image frame of reference.
-
-    Returns
-    -------
-    tuple[array-like, array-like]
-        The $u$ and $v$ spatial frequencies, but in a frame of reference where the
-        rotation and stretch of the original elliptical transformation is undone.
-    """
-    # Change of units.
-    pa_rad = pa * deg2rad
-
-    # Apply rotation matrix and stretch factor (latter for projected minor rim axis)
-    ut = (u * np.cos(pa_rad) - v * np.sin(pa_rad)) / stretch
-    vt = u * np.sin(pa_rad) + v * np.cos(pa_rad)
-
-    return ut, vt
 
 
 # TODO: bessel_jn(n, x) actually returns results for all orders up to the requested one
 # in array of shape (n + 1, shape(x)) due to recursion relation -> make this return
 # the Hankel tranforms up to the nth order instead! They can be calculated in one go!
-@partial(jit, static_argnames=["n"])
+@partial(jax.jit, static_argnames=["n"])
 def hankel_n(n, base_norm, rpos, intensity):
     r"""Function to compute the $n$-th order Hankel transform of given radial intensity
     profile. For $n=0$, this returns the normalized complex visibility of a
@@ -1314,15 +1338,15 @@ def hankel_n(n, base_norm, rpos, intensity):
         frequencies ``u`` and ``v``. Returned as a 1D array for the given spatial
         frequencies.
     """
-    rpos_rad = rpos * mas2rad  # Put radial positions in radian.
+    rpos_rad = rpos * MAS2RAD  # Put radial positions in radian.
 
     # Calculate the scalar Hankel transform normalization factor (only needs to be
     # computed once).
-    hankel_fnorm = np.trapezoid(intensity * rpos_rad, rpos_rad)
+    hankel_fnorm = jnp.trapezoid(intensity * rpos_rad, rpos_rad)
 
     # Broadcast multiply into a 2D kernel of shape (Nb, Nr) containing all possible
     # multiplied versions of baseline and radial intensity position.
-    x = 2.0 * np.pi * base_norm[:, None] * rpos_rad[None, :]
+    x = 2.0 * jnp.pi * base_norm[:, None] * rpos_rad[None, :]
 
     # Calculate bessel function for each element in x array.
     kernel = bessel_jn(n, x)
@@ -1334,7 +1358,7 @@ def hankel_n(n, base_norm, rpos, intensity):
     # Integrate each row across radial axis, collecting the result for each into
     # vector of shape (Nb,), giving the normalized n-th Hankel transform for each
     # baseline.
-    hankel_n = np.trapezoid(integrand_arr, rpos_rad, axis=1) / hankel_fnorm
+    hankel_n = jnp.trapezoid(integrand_arr, rpos_rad, axis=1) / hankel_fnorm
 
     return hankel_n
 
@@ -1365,7 +1389,7 @@ def loglike(values, params, data_obj, model_class):
     model_data = data_obj.model(model_class(**param_dict))
     data, errors = data_obj.flatten_data()
 
-    return -0.5 * np.sum((data - model_data) ** 2 / errors**2)
+    return -0.5 * jnp.sum((data - model_data) ** 2 / errors**2)
 
 
 def loglike_nosignal(values, params, data_obj, model_class):
@@ -1393,14 +1417,14 @@ def loglike_nosignal(values, params, data_obj, model_class):
 
     model_data = data_obj.model(model_class(**param_dict))
     _, errors = data_obj.flatten_data()
-    data = np.concatenate(
+    data = jnp.concatenate(
         [
-            np.ones_like(data_obj.vis),
-            np.zeros_like(data_obj.phi),
+            jnp.ones_like(data_obj.vis),
+            jnp.zeros_like(data_obj.phi),
         ]
     )
 
-    return -0.5 * np.sum((data - model_data) ** 2 / errors**2)
+    return -0.5 * jnp.sum((data - model_data) ** 2 / errors**2)
 
 
 def laplace_cov(values, params, data_obj, model_class):
@@ -1434,7 +1458,7 @@ def laplace_cov(values, params, data_obj, model_class):
     """
 
     objective = lambda vals: -loglike(vals, params, data_obj, model_class)
-    return _laplace_covariance(objective, np.asarray(values, dtype=float))
+    return _laplace_covariance(objective, jnp.asarray(values, dtype=float))
 
 
 def laplace_contrast_uncertainty(
@@ -1488,8 +1512,8 @@ def laplace_contrast_uncertainty(
     # Using jax.grad twice makes it explicit that we expect a scalar result.
     # jax.hessian on a scalar-to-scalar function returns a 0-d array (not a
     # matrix), so calling hessian_matrix here would be misleading.
-    d2_flux = jax.grad(jax.grad(objective))(np.asarray(flux, dtype=float))
-    return np.sqrt(1.0 / np.asarray(d2_flux, dtype=float))
+    d2_flux = jax.grad(jax.grad(objective))(jnp.asarray(flux, dtype=float))
+    return jnp.sqrt(1.0 / jnp.asarray(d2_flux, dtype=float))
 
 
 def fisher(values, params, data_obj, model_class, ridge=0.0):
@@ -1515,7 +1539,7 @@ def fisher(values, params, data_obj, model_class, ridge=0.0):
     """
     objective = lambda vals: -loglike(vals, params, data_obj, model_class)
     return _fisher_matrix(
-        objective, np.asarray(values, dtype=float), ridge=ridge
+        objective, jnp.asarray(values, dtype=float), ridge=ridge
     )
 
 
@@ -1543,11 +1567,11 @@ def chi2ppf(p, df):
     array-like
         Corresponding chi2 value to the percentile
     """
-    p = np.asarray(p, dtype=float)
-    p = np.clip(p, np.finfo(float).eps, 1.0 - np.finfo(float).eps)
+    p = jnp.asarray(p, dtype=float)
+    p = jnp.clip(p, jnp.finfo(float).eps, 1.0 - jnp.finfo(float).eps)
 
     try:
-        if float(onp.asarray(df)) == 1.0:
+        if float(np.asarray(df)) == 1.0:
             z = jax.scipy.stats.norm.ppf((p + 1.0) / 2.0)
             return z**2
     except Exception:
@@ -1577,7 +1601,7 @@ def nsigma(chi2r_test, chi2r_true, ndof):
 
     q = jax.scipy.stats.chi2.cdf(ndof * chi2r_test / chi2r_true, ndof)
     p = 1.0 - q
-    nsigma = np.sqrt(chi2ppf(p, 1.0))
+    nsigma = jnp.sqrt(chi2ppf(p, 1.0))
 
     return nsigma
 
@@ -1603,15 +1627,15 @@ def closure_phases(cvis, index_cps1, index_cps2, index_cps3):
         Closure phases in degrees.
 
     """
-    visphiall = np.rad2deg(np.angle(cvis))
-    visphiall = np.mod(visphiall + 180.0, 360.0) - 180.0
-    visphi = np.reshape(visphiall, (len(cvis), 1))
+    visphiall = jnp.rad2deg(jnp.angle(cvis))
+    visphiall = jnp.mod(visphiall + 180.0, 360.0) - 180.0
+    visphi = jnp.reshape(visphiall, (len(cvis), 1))
     cp = (
-        visphi[np.array(index_cps1)]
-        + visphi[np.array(index_cps2)]
-        - visphi[np.array(index_cps3)]
+        visphi[jnp.array(index_cps1)]
+        + visphi[jnp.array(index_cps2)]
+        - visphi[jnp.array(index_cps3)]
     )
-    out = np.reshape(np.mod(cp + 180.0, 360.0) - 180.0, len(index_cps1))
+    out = jnp.reshape(jnp.mod(cp + 180.0, 360.0) - 180.0, len(index_cps1))
     return out
 
 
@@ -1627,34 +1651,34 @@ def cp_indices(vis_sta_index, cp_sta_index):
 
     Returns
     -------
-    tuple[np.ndarray, np.ndarray, np.ndarray]
+    tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]
         Arrays ``(i_cps1, i_cps2, i_cps3)`` identifying the three baselines
         composing each closure phase.
     """
     vis_sta_index, cp_sta_index = (
-        onp.array(vis_sta_index, dtype=int),
-        onp.array(cp_sta_index, dtype=int),
+        np.array(vis_sta_index, dtype=int),
+        np.array(cp_sta_index, dtype=int),
     )
-    i_cps1 = onp.zeros(len(onp.array(cp_sta_index)), dtype=int)
-    i_cps2 = onp.zeros(len(onp.array(cp_sta_index)), dtype=int)
-    i_cps3 = onp.zeros(len(onp.array(cp_sta_index)), dtype=int)
+    i_cps1 = np.zeros(len(np.array(cp_sta_index)), dtype=int)
+    i_cps2 = np.zeros(len(np.array(cp_sta_index)), dtype=int)
+    i_cps3 = np.zeros(len(np.array(cp_sta_index)), dtype=int)
 
     for i in range(len(cp_sta_index)):
-        i_cps1[i] = onp.argwhere(
+        i_cps1[i] = np.argwhere(
             (cp_sta_index[i][0] == vis_sta_index[:, 0])
             & (cp_sta_index[i][1] == vis_sta_index[:, 1])
         )[0, 0]
-        i_cps2[i] = onp.argwhere(
+        i_cps2[i] = np.argwhere(
             (cp_sta_index[i][1] == vis_sta_index[:, 0])
             & (cp_sta_index[i][2] == vis_sta_index[:, 1])
         )[0, 0]
-        i_cps3[i] = onp.argwhere(
+        i_cps3[i] = np.argwhere(
             (cp_sta_index[i][0] == vis_sta_index[:, 0])
             & (cp_sta_index[i][2] == vis_sta_index[:, 1])
         )[0, 0]
     # Return indices as JAX arrays.
     return (
-        np.array(i_cps1, dtype=int),
-        np.array(i_cps2, dtype=int),
-        np.array(i_cps3, dtype=int),
+        jnp.array(i_cps1, dtype=int),
+        jnp.array(i_cps2, dtype=int),
+        jnp.array(i_cps3, dtype=int),
     )
