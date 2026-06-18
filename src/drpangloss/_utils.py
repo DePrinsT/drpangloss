@@ -1,7 +1,9 @@
-"""Utility functions for wider use in the codebase. The provided Bessel
-functions of the first kind are based on the [CEPHES](https://www.netlib.org/cephes/)
-implementation, and the JAX versions are adopted (almost) verbatim from
-[Harmonix](https://github.com/shashankdholakia/harmonix)."""
+"""Utility functions for wider use in the codebase.
+
+The provided Bessel functions of the first kind are based on the
+[CEPHES](https://www.netlib.org/cephes/) implementation, and the JAX versions are
+adopted (almost) verbatim from [Harmonix](https://github.com/shashankdholakia/harmonix).
+"""
 
 from functools import partial
 
@@ -11,12 +13,14 @@ from jax.lax import scan
 
 
 # === CONSTANTS ===
+
 RAD2MAS = 180.0 / jnp.pi * 3600.0 * 1000.0  # convert rad to mas
 MAS2RAD = jnp.pi / 180.0 / 3600.0 / 1000.0  # convert mas to rad
 DEG2RAD = jnp.pi / 180.0  # convert deg to rad
 RAD2DEG = 180.0 / jnp.pi  # convert rad to deg
 
 I2PI = 1j * 2.0 * jnp.pi
+
 # ===
 
 
@@ -283,7 +287,8 @@ def j0(x):
     )
 
 
-# Modified from Harmonix implementation to return only J0 if called with n=0.
+# Modified from Harmonix implementation to return only J0 if called with n=0
+# (previously returned stacked J0 and J1 results for this case).
 @partial(jit, static_argnums=0)
 def bessel_jn(n, x):
     """Compute the Bessel function $J_n(x)$, for $n >= 0$. Returns the function output
@@ -306,6 +311,7 @@ def bessel_jn(n, x):
 
 
 # ===
+
 
 # === IMAGE CALCULATION/TRANSFORMATION UTILITIES ===
 
@@ -433,6 +439,36 @@ def undo_elliptical_transf_coord(x, y, pa, stretch):
     yt = x * jnp.sin(pa_rad) + y * jnp.cos(pa_rad)
 
     return xt, yt
+
+
+# ===
+
+
+# === MISCELLANEOUS ===
+
+
+def dict_merge_az_amp_and_az_pa(d):
+    """Function for taking a dictionary mapping parameter key-val pairs (where the
+    keys indicate parameter names), taking all `az_ampi` and `az_pai` pairs and then
+    merging those into single-array `az_amps` and `az_pas` key-val pairs.
+    """
+    # New dict
+    d_new = {key: val for key, val in d.items() if not key.startswith("az_")}
+
+    # Number of modulations
+    nmod = sum(1 for key in d if key.startswith("az_amp"))
+
+    # Concatenate together.
+    az_amps = jnp.array([])
+    az_pas = jnp.array([])
+    for i in range(1, nmod + 1):
+        az_amps = jnp.concatenate((az_amps, jnp.atleast_1d(d[f"az_amp{i}"])))
+        az_pas = jnp.concatenate((az_pas, jnp.atleast_1d(d[f"az_pa{i}"])))
+
+    d_new["az_amps"] = az_amps
+    d_new["az_pas"] = az_pas
+
+    return d_new
 
 
 # ===

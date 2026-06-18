@@ -81,7 +81,7 @@ class OIData(zx.Base):
             # row-flatten these to 1D (Nb * Nw,) arrays. I.e. the first Nw elements
             # correspond to the different wavelength channels of the first baseline.
             # This will require some tiling / repeating of the wavelength solution
-            # and baseline coordinates.
+            # and baseline coordinates as we read them in.
             (
                 self.vis,
                 self.d_vis,
@@ -576,6 +576,10 @@ class BinaryModelCartesian(zx.Base):
         return cvis_binary(uu, vv, self.ddec, self.dra, self.flux)
 
 
+# TODO: reparametrize the whole az_phi set to az_pa here, since that will be easier
+# for HMC to fit. It will get rid of the degeneracy in az_phi which occurs if
+# pa_rim is badly constrained (e.g. for low inclinations) but the sky position of the
+# modulations is.
 class BinaryGaussianRimModel(zx.Base):
     r"""
     Represents a chromatic 'disk' rim surrounding a binary star.
@@ -620,12 +624,11 @@ class BinaryGaussianRimModel(zx.Base):
         1D array containing amplitude coefficients for rim cosine azimuthal modulations.
         The first element is seen as the amplitude for the first-order modulation,
         the second as the amplitude for the second-order modulation, etc.
-    az_phis: array-like
-        1D array containing offset angles of the rim's cosine azimuthal modulations,
-        relative to the position angle of the rim's projected major axis, in
-        degrees. The first element is seen as the offset for the first-order
+    az_pas: array-like
+        1D array containing position angles of the rim's cosine azimuthal modulations,
+        in degrees. The first element is seen as the angle for the first-order
         modulation, the second for the second-order modulation, etc.
-    wave0: float or array-like
+    wave0: array-like
         Wavelength at which the total flux fractions are defined in meters. Note
         that this is not a free parameter, but is just fixed at initialization.
 
@@ -634,14 +637,14 @@ class BinaryGaussianRimModel(zx.Base):
     * The intensity profiles is separable into a symmetric radial profile and cosine
     azimuthal modulations, meaning the image intensity can be described in polar image
     coordinates as $I(r, \theta) = f(r) \left( 1 + \sum_{m=0}^{n}
-    A_m \cos{(m(\theta - \phi_m)} \right)$, where $f(r)$ describes a Gaussian radial
+    A_m \cos{(m(\theta - \pa_m)} \right)$, where $f(r)$ describes a Gaussian radial
     intensity profile.
 
     * Note that the spectral slope is defined in the wavelength-formulation of flux,
     i.e. $d$ in $F_{\lambda} \propto \lambda^{d}$.
     """
 
-    flux_p: jax.Array
+    flux_p: jax.Array | float
     dra_p: jax.Array
     ddec_p: jax.Array
     si_p: jax.Array
@@ -655,8 +658,8 @@ class BinaryGaussianRimModel(zx.Base):
     si_rim: jax.Array
     flux_bkg: jax.Array
     az_amps: jax.Array
-    az_phis: jax.Array
-    wave0: float = eqx.field(static=True)
+    az_pas: jax.Array
+    wave0: jax.Array
 
     def __init__(
         self,
@@ -674,7 +677,7 @@ class BinaryGaussianRimModel(zx.Base):
         si_rim,
         flux_bkg,
         az_amps,
-        az_phis,
+        az_pas,
         wave0,
     ):
         """
@@ -715,14 +718,14 @@ class BinaryGaussianRimModel(zx.Base):
             1D array containing amplitude coefficients for rim cosine azimuthal modulations.
             The first element is seen as the amplitude for the first-order modulation,
             the second as the amplitude for the second-order modulation, etc.
-        az_phis: array-like
-            1D array containing offset angles of the rim's cosine azimuthal modulations,
-            relative to the position angle of the rim's projected major axis, in
-            degrees. The first element is seen as the offset for the first-order
+        az_pas: array-like
+            1D array containing position angles of the rim's cosine azimuthal modulations,
+            in degrees. The first element is seen as the angle for the first-order
             modulation, the second for the second-order modulation, etc.
-        wave0: float
+        wave0: array-like
             Wavelength at which the total flux fractions are defined in meters. Note
-            that this is not a free parameter, but is just fixed at initialization.
+            that this should not be considere a free parameter, but is just fixed at
+            initialization.
         """
         self.flux_p = jnp.asarray(flux_p, dtype=float)
         self.dra_p = jnp.asarray(dra_p, dtype=float)
@@ -738,8 +741,8 @@ class BinaryGaussianRimModel(zx.Base):
         self.si_rim = jnp.asarray(si_rim, dtype=float)
         self.flux_bkg = jnp.asarray(flux_bkg, dtype=float)
         self.az_amps = jnp.asarray(az_amps, dtype=float)
-        self.az_phis = jnp.asarray(az_phis, dtype=float)
-        self.wave0 = float(wave0)
+        self.az_pas = jnp.asarray(az_pas, dtype=float)
+        self.wave0 = jnp.asarray(wave0, dtype=float)
 
     def __repr__(self):
         """Return a readable representation of the model parameters."""
@@ -749,7 +752,7 @@ class BinaryGaussianRimModel(zx.Base):
             f"dra_s={self.dra_s}, ddec_s={self.ddec_s}, diam_rim={self.diam_rim}, "
             f"fwhm_rim={self.fwhm_rim}, inc_rim={self.inc_rim}, pa_rim={self.pa_rim}, "
             f"si_rim={self.si_rim}, flux_bkg={self.flux_bkg}, az_amps={self.az_amps},"
-            f"az_phis={self.az_phis}, wave0={self.wave0}"
+            f"az_pas={self.az_pas}, wave0={self.wave0}"
         )
         return repr_str
 
@@ -765,7 +768,7 @@ class BinaryGaussianRimModel(zx.Base):
               array_like]
             Tuple ``(flux_p, dra_p, ddec_p, si_p, flux_s, dra_s, ddec_s,
                      diam_rim, fwhm_rim, inc_rim, pa_rim, si_rim, flux_bkg, az_amps,
-                     az_phis)``.
+                     az_pas)``.
         """
         return (
             self.flux_p,
@@ -782,7 +785,7 @@ class BinaryGaussianRimModel(zx.Base):
             self.si_rim,
             self.flux_bkg,
             self.az_amps,
-            self.az_phis,
+            self.az_pas,
         )
 
     def model(self, u, v, wavel):
@@ -805,6 +808,9 @@ class BinaryGaussianRimModel(zx.Base):
         """
         uu, vv = u / wavel, v / wavel
 
+        # Get azimuthal order offfset angles compared to rim position angle.
+        az_phis = self.az_pas - self.pa_rim
+
         # Complex visbilities for Gaussian rim.
         cvis_rim = cvis_gaussian_rim(
             uu,
@@ -816,7 +822,7 @@ class BinaryGaussianRimModel(zx.Base):
             self.inc_rim,
             self.pa_rim,
             self.az_amps,
-            self.az_phis,
+            az_phis,
         )
         # Complex visibilities for binary components.
         dra_p_rad, ddec_p_rad = self.dra_p * MAS2RAD, self.ddec_p * MAS2RAD
@@ -838,7 +844,6 @@ class BinaryGaussianRimModel(zx.Base):
 
         return cvis_tot
 
-    # TODO: implement
     @partial(jax.jit, static_argnames="npix")
     def get_img(self, npix, ps):
         """Get an image of the model rim intensity. The returned image is normalized
@@ -873,7 +878,12 @@ class BinaryGaussianRimModel(zx.Base):
         """
         # Add radially symmetric component (order m=0) to beginning of the order arrays.
         az_amps = jnp.concatenate([jnp.array([1.0]), self.az_amps])
-        az_phis = jnp.concatenate([jnp.array([0.0]), self.az_phis])
+        az_phis = jnp.concatenate(
+            [
+                jnp.array([0.0]),
+                self.az_pas - self.pa_rim,
+            ]
+        )
         az_orders = jnp.arange(az_amps.size)  # Array of the order indices.
 
         # Change of units.
@@ -902,7 +912,8 @@ class BinaryGaussianRimModel(zx.Base):
             xmesh_ell, ymesh_ell
         )  # Elliptical coord position angle.
 
-        # Create a boolen mask to select pixels closest to the actual thin ellipse rim.
+        # Create a boolen mask to select pixels closest to the actual thin ellipse rim
+        # (i.e. to within one pixelscale of the thin rim).
         mask = jnp.abs(rmesh_ell - self.diam_rim / 2) <= (ps)
         img = jnp.where(mask, 1.0, img_zeros)
 
@@ -915,7 +926,7 @@ class BinaryGaussianRimModel(zx.Base):
         az_factors = jax.vmap(f)(az_amps, az_phis_rad, az_orders)
         img = img * jnp.sum(az_factors, axis=0)
 
-        # Apply Gaussian convolution
+        # Apply isotropic Gaussian convolution
         sigma = self.fwhm_rim / (2 * jnp.sqrt(2 * jnp.log(2)))
         img_gauss = (
             1 / (2 * jnp.pi * sigma**2) * jnp.exp(-(rmesh**2) / (2 * sigma**2))
@@ -923,31 +934,6 @@ class BinaryGaussianRimModel(zx.Base):
         img = fftconvolve(img, img_gauss, mode="same")
 
         return img / jnp.sum(img)
-
-    # TODO: implement
-    def calc_img_intensity(x, y):
-        """Calculate the rim image intensity.
-
-        Note that the central stars are left out as they are point sources. Similarly,
-        the overresolved background is omitted since it has no spatially defined
-        location in the field-of-view.
-
-        Parameters
-        ----------
-        x : array-like
-            1D array of image x-positions (measured West to East) of points for which
-            you wish to calculate the intensity.
-        y : array-like
-            1D array of image y-positions (measured South to North) of points for which
-            you wish to calculate the intensity.
-
-        Returns
-        -------
-        array-like
-            A 1D array containing the rim image intensities at the specified positions.
-        """
-
-        pass
 
 
 def cvis_binary_angular(u, v, sep, pa, contrast):
