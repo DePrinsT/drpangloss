@@ -576,10 +576,7 @@ class BinaryModelCartesian(zx.Base):
         return cvis_binary(uu, vv, self.ddec, self.dra, self.flux)
 
 
-# TODO: reparametrize the whole az_phi set to az_pa here, since that will be easier
-# for HMC to fit. It will get rid of the degeneracy in az_phi which occurs if
-# pa_rim is badly constrained (e.g. for low inclinations) but the sky position of the
-# modulations is.
+# TODO: add spectral indices for overresolved background and secondary star.
 class BinaryGaussianRimModel(zx.Base):
     r"""
     Represents a chromatic 'disk' rim surrounding a binary star.
@@ -607,6 +604,8 @@ class BinaryGaussianRimModel(zx.Base):
     ddec_s : float or array-like
         Declination offset of the secondary in milliarcseconds. Calculated relative
         to the center of the the disk rim.
+    si_s : float or array-like
+        Spectral index of the secondary.
     diam_rim: float or array-like
         Diameter of the rim in milliarcseconds.
     fwhm_rim: float or array-like
@@ -620,6 +619,8 @@ class BinaryGaussianRimModel(zx.Base):
         Spectral index of the rim.
     flux_bkg: float or array-like
         Total flux fraction of the grey overresolved background.
+    si_bkg: float or array-like
+        Spectral index of the overresolved background.
     az_amps: array-like
         1D array containing amplitude coefficients for rim cosine azimuthal modulations.
         The first element is seen as the amplitude for the first-order modulation,
@@ -644,19 +645,22 @@ class BinaryGaussianRimModel(zx.Base):
     i.e. $d$ in $F_{\lambda} \propto \lambda^{d}$.
     """
 
-    flux_p: jax.Array | float
+    flux_p: jax.Array
+    ud_p: jax.Array
     dra_p: jax.Array
     ddec_p: jax.Array
     si_p: jax.Array
     flux_s: jax.Array
     dra_s: jax.Array
     ddec_s: jax.Array
+    si_s: jax.Array
     diam_rim: jax.Array
     fwhm_rim: jax.Array
     inc_rim: jax.Array
     pa_rim: jax.Array
     si_rim: jax.Array
     flux_bkg: jax.Array
+    si_bkg: jax.Array
     az_amps: jax.Array
     az_pas: jax.Array
     wave0: jax.Array
@@ -664,18 +668,21 @@ class BinaryGaussianRimModel(zx.Base):
     def __init__(
         self,
         flux_p,
+        ud_p,
         dra_p,
         ddec_p,
         si_p,
         flux_s,
         dra_s,
         ddec_s,
+        si_s,
         diam_rim,
         fwhm_rim,
         inc_rim,
         pa_rim,
         si_rim,
         flux_bkg,
+        si_bkg,
         az_amps,
         az_pas,
         wave0,
@@ -687,6 +694,8 @@ class BinaryGaussianRimModel(zx.Base):
         ----------
         flux_p : float or array-like
             Total flux fraction of the primary.
+        ud_p : float or array-like
+            Diameter of primary uniform disk in milliarceseconds.
         dra_p : float or array-like
             Right-ascension offset of the primary in milliarcseconds.
         ddec_p : float or array-like
@@ -701,6 +710,8 @@ class BinaryGaussianRimModel(zx.Base):
         ddec_s : float or array-like
             Declination offset of the secondary in milliarcseconds. Calculated relative
             to the center of the the disk rim.
+        si_s : float or array-like
+            Spectral index of the secondary.
         diam_rim: float or array-like
             Diameter of the rim in milliarcseconds.
         fwhm_rim: float or array-like
@@ -714,6 +725,8 @@ class BinaryGaussianRimModel(zx.Base):
             Spectral index of the rim.
         flux_bkg: float or array-like
             Total flux fraction of the grey overresolved background.
+        si_bkg: float or array-like
+            Spectral index of the overresolved background.
         az_amps: array-like
             1D array containing amplitude coefficients for rim cosine azimuthal modulations.
             The first element is seen as the amplitude for the first-order modulation,
@@ -728,18 +741,21 @@ class BinaryGaussianRimModel(zx.Base):
             initialization.
         """
         self.flux_p = jnp.asarray(flux_p, dtype=float)
+        self.ud_p = jnp.asarray(ud_p, dtype=float)
         self.dra_p = jnp.asarray(dra_p, dtype=float)
         self.ddec_p = jnp.asarray(ddec_p, dtype=float)
         self.si_p = jnp.asarray(si_p, dtype=float)
         self.flux_s = jnp.asarray(flux_s, dtype=float)
         self.dra_s = jnp.asarray(dra_s, dtype=float)
         self.ddec_s = jnp.asarray(ddec_s, dtype=float)
+        self.si_s = jnp.asarray(si_s, dtype=float)
         self.diam_rim = jnp.asarray(diam_rim, dtype=float)
         self.fwhm_rim = jnp.asarray(fwhm_rim, dtype=float)
         self.inc_rim = jnp.asarray(inc_rim, dtype=float)
         self.pa_rim = jnp.asarray(pa_rim, dtype=float)
         self.si_rim = jnp.asarray(si_rim, dtype=float)
         self.flux_bkg = jnp.asarray(flux_bkg, dtype=float)
+        self.si_bkg = jnp.asarray(si_bkg, dtype=float)
         self.az_amps = jnp.asarray(az_amps, dtype=float)
         self.az_pas = jnp.asarray(az_pas, dtype=float)
         self.wave0 = jnp.asarray(wave0, dtype=float)
@@ -748,10 +764,11 @@ class BinaryGaussianRimModel(zx.Base):
         """Return a readable representation of the model parameters."""
         repr_str = (
             f"BinaryGaussianRimModel(flux_p={self.flux_p}, dra_p={self.dra_p}, "
+            f"ud_p = {self.ud_p}, "
             f"ddec_p={self.ddec_p}, si_p={self.si_p}, flux_s={self.flux_s}, "
-            f"dra_s={self.dra_s}, ddec_s={self.ddec_s}, diam_rim={self.diam_rim}, "
+            f"dra_s={self.dra_s}, ddec_s={self.ddec_s}, si_s={self.si_s}, diam_rim={self.diam_rim}, "
             f"fwhm_rim={self.fwhm_rim}, inc_rim={self.inc_rim}, pa_rim={self.pa_rim}, "
-            f"si_rim={self.si_rim}, flux_bkg={self.flux_bkg}, az_amps={self.az_amps},"
+            f"si_rim={self.si_rim}, flux_bkg={self.flux_bkg}, si_bkg={self.si_bkg}, az_amps={self.az_amps},"
             f"az_pas={self.az_pas}, wave0={self.wave0}"
         )
         return repr_str
@@ -765,25 +782,28 @@ class BinaryGaussianRimModel(zx.Base):
         tuple[array-like, array-like, array-like, array-like, array-like,
               array-like, array-like, array-like, array-like, array-like,
               array-like, array-like, array-like, array-like, array_like,
-              array_like]
-            Tuple ``(flux_p, dra_p, ddec_p, si_p, flux_s, dra_s, ddec_s,
-                     diam_rim, fwhm_rim, inc_rim, pa_rim, si_rim, flux_bkg, az_amps,
+              array_like, array-like, array-like, array-like]
+            Tuple ``(flux_p, ud_p, dra_p, ddec_p, si_p, flux_s, dra_s, ddec_s, si_s,
+                     diam_rim, fwhm_rim, inc_rim, pa_rim, si_rim, flux_bkg, si_bkg, az_amps,
                      az_pas)``.
         """
         return (
             self.flux_p,
+            self.self.ud_p,
             self.dra_p,
             self.ddec_p,
             self.si_p,
             self.flux_s,
             self.dra_s,
             self.ddec_s,
+            self.si_s,
             self.diam_rim,
             self.fwhm_rim,
             self.inc_rim,
             self.pa_rim,
             self.si_rim,
             self.flux_bkg,
+            self.self.si_bkg,
             self.az_amps,
             self.az_pas,
         )
@@ -825,17 +845,16 @@ class BinaryGaussianRimModel(zx.Base):
             az_phis,
         )
         # Complex visibilities for binary components.
-        dra_p_rad, ddec_p_rad = self.dra_p * MAS2RAD, self.ddec_p * MAS2RAD
+        cvis_p = cvis_uniform_disk(uu, vv, self.ud_p, self.dra_p, self.ddec_p)
         dra_s_rad, ddec_s_rad = self.dra_s * MAS2RAD, self.ddec_s * MAS2RAD
-        cvis_p = jnp.exp(-I2PI * (uu * dra_p_rad + vv * ddec_p_rad))
         cvis_s = jnp.exp(-I2PI * (uu * dra_s_rad + vv * ddec_s_rad))
 
         # Calculate spectra for each component.
         flux_rim = 1 - self.flux_p - self.flux_s - self.flux_bkg
         spec_rim = flux_rim * (wavel / self.wave0) ** self.si_rim
         spec_p = self.flux_p * (wavel / self.wave0) ** self.si_p
-        spec_s = jnp.ones_like(spec_rim) * self.flux_s
-        spec_bkg = jnp.ones_like(spec_rim) * self.flux_bkg
+        spec_s = self.flux_s * (wavel / self.wave0) ** self.si_s
+        spec_bkg = self.flux_bkg * (wavel / self.wave0) ** self.si_bkg
 
         # Combine into spectral-weighted total complex visibility.
         cvis_tot = (
@@ -1017,7 +1036,7 @@ def cvis_binary(u, v, ddec, dra, planet):
     return cvis
 
 
-def cvis_gaussian(u, v, fwhm):
+def cvis_gaussian(u, v, fwhm, dra, ddec):
     """Compute the complex visibility of a centered isotropic 2D Gaussian.
 
     Parameters
@@ -1028,6 +1047,10 @@ def cvis_gaussian(u, v, fwhm):
         Baseline ``v`` coordinates in wavelength units (cycles / rad).
     fwhm : float or array-like
         Full-width-half-maximum of the Gaussian in milliarcseconds.
+    dra : float or array-like
+        Right-ascension offset of the rim in milliarcseconds.
+    ddec : float or array-like
+        Declination offset of the rim in milliarcseconds.
 
     Returns
     -------
@@ -1040,7 +1063,7 @@ def cvis_gaussian(u, v, fwhm):
     inclination). A separate transformation of $uv$ coordinates should account for this.
     """
     # Change of units.
-    fwhm_rad = fwhm * MAS2RAD
+    fwhm_rad, dra_rad, ddec_rad = fwhm * MAS2RAD, dra * MAS2RAD, ddec * MAS2RAD
 
     # Baseline norm.
     base_norm = jnp.hypot(u, v)  # In wavelength units (cycles/rad).
@@ -1050,6 +1073,58 @@ def cvis_gaussian(u, v, fwhm):
         jnp.exp(-(jnp.pi**2) * fwhm_rad**2 * base_norm**2 / (4 * jnp.log(2)))
         + 0j
     )
+
+    # Apply offset phase-factor.
+    phi = jnp.exp(-I2PI * (u * dra_rad + v * ddec_rad))
+    cvis *= phi
+
+    return cvis
+
+
+def cvis_uniform_disk(u, v, ud, dra, ddec):
+    """Compute complex visibilities for uniform disk model.
+
+    Parameters
+    ----------
+    u : array-like
+        Baseline ``u`` coordinates in wavelength units (cycles / rad).
+    v : array-like
+        Baseline ``v`` coordinates in wavelength units (cycles / rad).
+    ud : float or array-like
+        Diameter of the uniform disk in milliarcseconds.
+    dra : float or array-like
+        Right-ascension offset of the rim in milliarcseconds.
+    ddec : float or array-like
+        Declination offset of the rim in milliarcseconds.
+
+    Returns
+    -------
+    array-like
+        Complex visibility samples.
+
+    Notes
+    -----
+    This function does not account for rotation and geometric stretching (e.g. due to
+    inclination). A separate transformation of $uv$ coordinates should account for this.
+    """
+    # Change of units.
+    ud_rad, dra_rad, ddec_rad = ud * MAS2RAD, dra * MAS2RAD, ddec * MAS2RAD
+
+    # Baseline norm.
+    base_norm = jnp.hypot(u, v)  # In wavelength units (cycles/rad).
+
+    # Kernel for Bessel function.
+    kernel = jnp.pi * base_norm * ud_rad
+
+    # Calculate complex visibility (forced to be complex). Where statement for
+    # avoiding divergence around x=0.
+    cvis = jnp.where(
+        kernel == 0, 1.0 + 0j, (2 * bessel_jn(1, kernel)[1]) / kernel + 0j
+    )
+
+    # Apply offset phase-factor.
+    phi = jnp.exp(-I2PI * (u * dra_rad + v * ddec_rad))
+    cvis *= phi
 
     return cvis
 
@@ -1110,10 +1185,12 @@ def cvis_gaussian_rim(u, v, dra, ddec, diam, fwhm, inc, pa, az_amps, az_phis):
     cvis = cvis_radial_dirac_delta_modulated(
         ut, vt, diam / 2.0, az_amps, az_phis
     )
+
     # Add effect of convolution in image-plane with an isotropic Gaussian of the given
     # FWHM in the original image frame of reference.
-    cvis *= cvis_gaussian(u, v, fwhm)
+    cvis *= cvis_gaussian(u, v, fwhm, 0.0, 0.0)
     # Apply offset phase-factor.
+
     phi = jnp.exp(-I2PI * (u * dra_rad + v * ddec_rad))
     cvis *= phi
 
@@ -1209,6 +1286,8 @@ def cvis_radial_dirac_delta_modulated(u, v, r0, az_amps, az_phis):
     return cvis
 
 
+# TODO: make this work with modified Hankel profile transform (where multiple
+# orders are returned at the same time).
 def cvis_radial_profile_modulated(u, v, rpos, intensity, az_amps, az_phis):
     r"""Compute the complex visibility for a object whose intensity profiles is
     separable into a symmetric radial profile and cosine azimuthal modulations,

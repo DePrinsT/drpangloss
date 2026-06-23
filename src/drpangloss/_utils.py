@@ -455,18 +455,25 @@ def dict_merge_az_amp_and_az_pa(d):
     # New dict
     d_new = {key: val for key, val in d.items() if not key.startswith("az_")}
 
-    # Number of modulations
-    nmod = sum(1 for key in d if key.startswith("az_amp"))
+    # # Number of modulations
+    # nmod = sum(1 for key in d if key.startswith("az_amp"))
 
-    # Concatenate together.
-    az_amps = jnp.array([])
-    az_pas = jnp.array([])
-    for i in range(1, nmod + 1):
-        az_amps = jnp.concatenate((az_amps, jnp.atleast_1d(d[f"az_amp{i}"])))
-        az_pas = jnp.concatenate((az_pas, jnp.atleast_1d(d[f"az_pa{i}"])))
+    # # Concatenate together.
+    # az_amps = jnp.array([])
+    # az_pas = jnp.array([])
+    # for i in range(1, nmod + 1):
+    #     az_amps = jnp.concatenate((az_amps, jnp.atleast_1d(d[f"az_amp{i}"])))
+    #     az_pas = jnp.concatenate((az_pas, jnp.atleast_1d(d[f"az_pa{i}"])))
 
-    d_new["az_amps"] = az_amps
-    d_new["az_pas"] = az_pas
+    if any(key.startswith("az_amp") for key in d):
+        amp_keys = sorted(k for k in d if k.startswith("az_amp"))
+        az_amps = jnp.stack([d[k] for k in amp_keys])
+        d_new["az_amps"] = az_amps
+
+    if any(key.startswith("az_pa") for key in d):
+        pa_keys = sorted(k for k in d if k.startswith("az_pa"))
+        az_pas = jnp.stack([d[k] for k in pa_keys])
+        d_new["az_pas"] = az_pas
 
     return d_new
 
