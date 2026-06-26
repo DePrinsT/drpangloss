@@ -1,9 +1,12 @@
+from collections.abc import Sequence
 from functools import partial
 
 import equinox as eqx
 import jax
+from astropy.io import fits
 import jax.numpy as jnp
 import numpy as np
+import os
 import zodiax as zx
 from jax.scipy.signal import fftconvolve
 
@@ -22,15 +25,21 @@ from .inference import (
 )
 
 
+# TODO: make this work if one wavelength solution HDU has multiple associated data HDUs
+# (epoch 5 is an example of this). Also make an option to discard flagged data, maybe
+# using a boolean mask?
 class OIData(zx.Base):
     """
     Store and transform optical-interferometry observables.
 
     Parameters
     ----------
-    data : dict or object
-        Either a dictionary with explicit interferometric arrays, or an OIFITS
-        object opened with ``pyoifits``.
+    data : dict or str | PathLike[str] or Sequence[str | PathLike[str]]
+        Either a dictionary with explicit interferometric arrays, or a path or Sequence
+        of paths to OIFITS files.
+    filter_flagged : bool
+        Whether or not to filter flagged data from the reading process when reading
+        from OIFITS files.
 
     Notes
     -----
@@ -53,28 +62,22 @@ class OIData(zx.Base):
     v2_flag: bool = eqx.field(static=True)
     cp_flag: bool = eqx.field(static=True)
 
-    def __init__(self, data):
+    def __init__(self, data, *, filter_flagged=True):
         """
         Initialize from an OIFITS object or explicit arrays.
 
         Parameters
         ----------
-        data : dict or object
-            OIFITS data opened with ``pyoifits``, or a dictionary containing
+        data : dict or str | PathLike[str] or Sequence[str | PathLike[str]]
+            A path or Sequence of paths to OIFITS data files, or a dictionary containing
             ``u``, ``v``, ``wavel``, ``vis``, ``d_vis``, ``phi``, ``d_phi``,
             optional closure-phase indices, and convention flags.
+        filter_flagged : bool
+            Whether or not to filter flagged data from the reading process when reading
+            from OIFITS files.
         """
 
         if not isinstance(data, dict):
-            # assume data is an oifits file opened with pyoifits
-            data_names = [d.name for d in data.get_dataHDUs()]
-            assert "OI_VIS" in data_names or "OI_VIS2" in data_names, (
-                "No visibility data found in OIFITS file"
-            )
-            assert "OI_T3" in data_names or "OI_PHI" in data_names, (
-                "No phase data found in OIFITS file"
-            )
-
             # Start off with empty 1D JAX arrays to concatenate to. We assume 1 element
             # per probed spatial frequency point. OIFITS data arrays are shaped (Nb, Nw)
             # , with Nb the number of baselines and Nw the number of wavelengths -> we
@@ -95,216 +98,23 @@ class OIData(zx.Base):
                 self.i_cps3,
             ) = (jnp.array([], dtype=float),) * 10
 
-            # loop over wavelength solution HDUs and find corresponding
-            # visibilities/phases based on INSNAME header keyword.
-            hdu_wave_list = [
-                hdu for hdu in data if hdu.name == "OI_WAVELENGTH"
-            ]
-            for hdu_wave in hdu_wave_list:
-                # get wavelength solution as 1D array.
-                wavel_sol = jnp.array(hdu_wave.data["EFF_WAVE"], dtype=float)
-                insname = hdu_wave.header["INSNAME"]
-                # get number of previously loaded visibility measurements
-                nvis_old = self.vis.size
-
-                # look up all corresponding HDUs matched based on INSNAME keyword
-                hdu_vis2_list = [
-                    hdu
-                    for hdu in data
-                    if (
-                        hdu.name == "OI_VIS2"
-                        and hdu.header["INSNAME"] == insname
-                    )
-                ]
-                hdu_vis_list = [
-                    hdu
-                    for hdu in data
-                    if (
-                        hdu.name == "OI_VIS"
-                        and hdu.header["INSNAME"] == insname
-                    )
-                ]
-                hdu_t3_list = [
-                    hdu
-                    for hdu in data
-                    if (
-                        hdu.name == "OI_T3"
-                        and hdu.header["INSNAME"] == insname
-                    )
-                ]
-
-                # if square visibilities are available, get them, otherwise get unsquared visibilities
-                if len(hdu_vis2_list) != 0:
-                    # Add data to 1D array attributes.
-                    hdu_vis = hdu_vis2_list[0]
-                    vis_arr = jnp.array(hdu_vis.data["VIS2DATA"], dtype=float)
-                    d_vis_arr = jnp.array(hdu_vis.data["VIS2ERR"], dtype=float)
-                    self.vis = jnp.concatenate((self.vis, vis_arr.flatten()))
-                    self.d_vis = jnp.concatenate(
-                        (
-                            self.d_vis,
-                            d_vis_arr.flatten(),
-                        )
-                    )
-                    self.wavel = jnp.concatenate(
-                        (
-                            self.wavel,
-                            jnp.tile(wavel_sol, vis_arr.shape[0]),
-                        )
-                    )
-                    u = jnp.array(hdu_vis.data["UCOORD"], dtype=float)
-                    v = jnp.array(hdu_vis.data["VCOORD"], dtype=float)
-                    self.u = jnp.concatenate(
-                        (
-                            self.u,
-                            jnp.repeat(u, wavel_sol.size),
-                        )
-                    )
-                    self.v = jnp.concatenate(
-                        (
-                            self.v,
-                            jnp.repeat(v, wavel_sol.size),
-                        )
-                    )
-
-                    # Stance indices for matching with closure phase data.
-                    vis_sta_index = hdu_vis.data["STA_INDEX"]
-
-                    self.v2_flag = True
-                elif len(hdu_vis_list) != 0:
-                    # Add data to 1D array attributes.
-                    hdu_vis = hdu_vis_list[0]
-                    vis_key = (
-                        "VISAMP"
-                        if "VISAMP" in hdu_vis.data.names
-                        else "VISPHI"
-                    )
-                    d_vis_key = (
-                        "VISAMPERR"
-                        if "VISAMPERR" in hdu_vis.data.names
-                        else "VISERR"
-                    )
-                    vis_arr = jnp.array(hdu_vis.data[vis_key], dtype=float)
-                    d_vis_arr = jnp.array(hdu_vis.data[d_vis_key], dtype=float)
-                    self.vis = jnp.concatenate((self.vis, vis_arr.flatten()))
-                    self.d_vis = jnp.concatenate(
-                        (
-                            self.d_vis,
-                            d_vis_arr.flatten(),
-                        )
-                    )
-                    self.wavel = jnp.concatenate(
-                        (
-                            self.wavel,
-                            jnp.tile(wavel_sol, vis_arr.shape[0]),
-                        )
-                    )
-                    u = jnp.array(hdu_vis.data["UCOORD"], dtype=float)
-                    v = jnp.array(hdu_vis.data["VCOORD"], dtype=float)
-                    self.u = jnp.concatenate(
-                        (
-                            self.u,
-                            jnp.repeat(u, wavel_sol.size),
-                        )
-                    )
-                    self.v = jnp.concatenate(
-                        (
-                            self.v,
-                            jnp.repeat(v, wavel_sol.size),
-                        )
-                    )
-
-                    # Stance indices for matching with closure phase data.
-                    vis_sta_index = hdu_vis.data["STA_INDEX"]
-
-                    self.v2_flag = False
-                else:
-                    raise ValueError(
-                        "No corresponding OI_VIS2 or OI_VIS table found"
-                        f"for OI_WAVELENGTH table with INSNAME: {insname}."
-                    )
-
-                # if absolute phases are available, get them, otherwise get closure phasess
-                if (
-                    len(hdu_vis_list) != 0
-                    and hdu_vis_list[0].header["PHITYP"] == "absolute"
-                ):
-                    hdu_phi = hdu_vis_list[0]
-                    phi_arr = jnp.array(hdu_phi.data["VISPHI"], dtype=float)
-                    d_phi_arr = jnp.array(
-                        hdu_phi.data["VISPHIERR"], dtype=float
-                    )
-                    self.phi = jnp.concatenate((self.phi, phi_arr.flatten()))
-                    self.d_phi = jnp.concatenate(
-                        (
-                            self.d_phi,
-                            d_phi_arr.flatten(),
-                        )
-                    )
-                    self.i_cps1, self.i_cps2, self.i_cps3 = None, None, None
-
-                    self.cp_flag = False
-                elif len(hdu_t3_list) != 0:
-                    hdu_phi = hdu_t3_list[0]
-                    phi_arr = jnp.array(hdu_phi.data["T3PHI"], dtype=float)
-                    d_phi_arr = jnp.array(
-                        hdu_phi.data["T3PHIERR"], dtype=float
-                    )
-                    self.phi = jnp.concatenate((self.phi, phi_arr.flatten()))
-                    self.d_phi = jnp.concatenate(
-                        (
-                            self.d_phi,
-                            d_phi_arr.flatten(),
-                        )
-                    )
-                    cp_sta_index = jnp.array(
-                        hdu_phi.data["STA_INDEX"], dtype=int
-                    )
-
-                    # get indices of the baselines of the corresponding visibility
-                    # measurements (i.e. index of the corresponding value in self.vis).
-                    # We separately account for number of wavelength channels and
-                    # previously loaded measurements below.
-                    i_cps1, i_cps2, i_cps3 = cp_indices(
-                        vis_sta_index, cp_sta_index
-                    )
-
-                    # visibility indices for 1st wavelength channels
-                    i_cps1 *= wavel_sol.size
-                    i_cps2 *= wavel_sol.size
-                    i_cps3 *= wavel_sol.size
-
-                    # squeeze in channel offsets with broadcasting and account for
-                    # previously loaded visibility measurments
-                    i_wave_offsets = jnp.arange(0, wavel_sol.size)[
-                        None, :
-                    ]  # squeeze in channel offsets (shape (1, Nw))
-                    i_cps1 = (
-                        i_cps1[:, None] + i_wave_offsets
-                    ).ravel() + nvis_old
-                    i_cps2 = (
-                        i_cps2[:, None] + i_wave_offsets
-                    ).ravel() + nvis_old
-                    i_cps3 = (
-                        i_cps3[:, None] + i_wave_offsets
-                    ).ravel() + nvis_old
-
-                    self.i_cps1 = jnp.concatenate((self.i_cps1, i_cps1))
-                    self.i_cps2 = jnp.concatenate((self.i_cps2, i_cps2))
-                    self.i_cps3 = jnp.concatenate((self.i_cps3, i_cps3))
-
-                    # make sure the indices are integer
-                    self.i_cps1 = jnp.astype(self.i_cps1, int)
-                    self.i_cps2 = jnp.astype(self.i_cps2, int)
-                    self.i_cps3 = jnp.astype(self.i_cps3, int)
-
-                    self.cp_flag = True
-                else:
-                    raise ValueError(
-                        "No corresponding absolute phases in OI_VIS table or closure"
-                        "phases in OI_T3 table found for OI_WAVELENGTH table with "
-                        f"INSNAME: {insname}."
-                    )
+            # Select case for a single OIFITS file versus sequence of files. In the
+            # latter case all data is concatenated to what is already contained in the
+            # object.
+            if isinstance(data, (str, os.PathLike)):
+                with fits.open(data, mode="readonly") as hdul:
+                    self._read_oifits_file(hdul)
+            elif isinstance(data, Sequence):
+                for oifits_file in [
+                    d for d in data if isinstance(d, (str, os.PathLike))
+                ]:
+                    with fits.open(oifits_file, mode="readonly") as hdul:
+                        self._read_oifits_file(hdul)
+            else:
+                ValueError(
+                    "The passed object is neither a dictionary nor "
+                    "a filepath or sequence of filepaths."
+                )
         else:
             # assume data is a dict of the form {'u':u,'v':v,'wavel':wavel,'vis':vis,'d_vis':d_vis,
             #'phi':phi,'d_phi':d_phi,'i_cps1':i_cps1,'i_cps2':i_cps2,'i_cps3':i_cps3,'v2_flag':v2_flag,'cp_flag':cp_flag}
@@ -345,6 +155,209 @@ class OIData(zx.Base):
             f"{visname}={self.vis}, d_{visname}={self.d_vis}, "
             f"i_cps1={self.i_cps1}, i_cps2={self.i_cps2}, i_cps3={self.i_cps3})"
         )
+
+    def _read_oifits_file(self, hdul):
+        """Read in a sinlge OIFITS file ``astropy`` HUDList and merge with already
+        stored data."""
+        # loop over wavelength solution HDUs and find corresponding
+        # visibilities/phases based on INSNAME header keyword.
+        hdu_wave_list = [hdu for hdu in hdul if hdu.name == "OI_WAVELENGTH"]
+        for hdu_wave in hdu_wave_list:
+            # get wavelength solution as 1D array.
+            wavel_sol = jnp.array(hdu_wave.data["EFF_WAVE"], dtype=float)
+            insname = hdu_wave.header["INSNAME"]
+            # get number of previously loaded visibility measurements
+            nvis_old = self.vis.size
+
+            # look up all corresponding HDUs matched based on INSNAME keyword
+            hdu_vis2_list = [
+                hdu
+                for hdu in hdul
+                if (hdu.name == "OI_VIS2" and hdu.header["INSNAME"] == insname)
+            ]
+            hdu_vis_list = [
+                hdu
+                for hdu in hdul
+                if (hdu.name == "OI_VIS" and hdu.header["INSNAME"] == insname)
+            ]
+            hdu_t3_list = [
+                hdu
+                for hdu in hdul
+                if (hdu.name == "OI_T3" and hdu.header["INSNAME"] == insname)
+            ]
+
+            # If visibility flag has not yet been set, set it now.
+            if not hasattr(self, "v2_flag"):
+                if len(hdu_vis2_list) != 0:
+                    self.v2_flag = True
+                elif len(hdu_vis_list) != 0:
+                    self.v2_flag = False
+
+            # if square visibilities are available, get them, otherwise get unsquared visibilities
+            if self.v2_flag is True and len(hdu_vis2_list) != 0:
+                # Add data to 1D array attributes.
+                hdu_vis = hdu_vis2_list[0]
+                vis_arr = jnp.array(hdu_vis.data["VIS2DATA"], dtype=float)
+                d_vis_arr = jnp.array(hdu_vis.data["VIS2ERR"], dtype=float)
+                self.vis = jnp.concatenate(
+                    (
+                        self.vis,
+                        vis_arr.flatten(),
+                    )
+                )
+                self.d_vis = jnp.concatenate(
+                    (
+                        self.d_vis,
+                        d_vis_arr.flatten(),
+                    )
+                )
+                self.wavel = jnp.concatenate(
+                    (
+                        self.wavel,
+                        jnp.tile(wavel_sol, vis_arr.shape[0]),
+                    )
+                )
+                u = jnp.array(hdu_vis.data["UCOORD"], dtype=float)
+                v = jnp.array(hdu_vis.data["VCOORD"], dtype=float)
+                self.u = jnp.concatenate(
+                    (
+                        self.u,
+                        jnp.repeat(u, wavel_sol.size),
+                    )
+                )
+                self.v = jnp.concatenate(
+                    (
+                        self.v,
+                        jnp.repeat(v, wavel_sol.size),
+                    )
+                )
+
+                # Stance indices for matching with closure phase data.
+                vis_sta_index = hdu_vis.data["STA_INDEX"]
+            elif self.v2_flag is False and len(hdu_vis_list) != 0:
+                # Add data to 1D array attributes.
+                hdu_vis = hdu_vis_list[0]
+                vis_key = (
+                    "VISAMP" if "VISAMP" in hdu_vis.data.names else "VISPHI"
+                )
+                d_vis_key = (
+                    "VISAMPERR"
+                    if "VISAMPERR" in hdu_vis.data.names
+                    else "VISERR"
+                )
+                vis_arr = jnp.array(hdu_vis.data[vis_key], dtype=float)
+                d_vis_arr = jnp.array(hdu_vis.data[d_vis_key], dtype=float)
+                self.vis = jnp.concatenate((self.vis, vis_arr.flatten()))
+                self.d_vis = jnp.concatenate(
+                    (
+                        self.d_vis,
+                        d_vis_arr.flatten(),
+                    )
+                )
+                self.wavel = jnp.concatenate(
+                    (
+                        self.wavel,
+                        jnp.tile(wavel_sol, vis_arr.shape[0]),
+                    )
+                )
+                u = jnp.array(hdu_vis.data["UCOORD"], dtype=float)
+                v = jnp.array(hdu_vis.data["VCOORD"], dtype=float)
+                self.u = jnp.concatenate(
+                    (
+                        self.u,
+                        jnp.repeat(u, wavel_sol.size),
+                    )
+                )
+                self.v = jnp.concatenate(
+                    (
+                        self.v,
+                        jnp.repeat(v, wavel_sol.size),
+                    )
+                )
+
+                # Stance indices for matching with closure phase data.
+                vis_sta_index = hdu_vis.data["STA_INDEX"]
+            else:
+                raise ValueError(
+                    "No corresponding OI_VIS2 or OI_VIS table found"
+                    f"for OI_WAVELENGTH table with INSNAME: {insname}."
+                )
+
+            # If phase flag has not yet been set, set it now.
+            if not hasattr(self, "cp_flag"):
+                if (
+                    len(hdu_vis_list) != 0
+                    and hdu_vis_list[0].header.get("PHITYP") == "absolute"
+                ):
+                    self.cp_flag = False
+                elif len(hdu_t3_list) != 0:
+                    self.cp_flag = True
+
+            # if absolute phases are available, get them, otherwise get closure phasess
+            if self.cp_flag is False and (
+                len(hdu_vis_list) != 0
+                and hdu_vis_list[0].header.get("PHITYP") == "absolute"
+            ):
+                hdu_phi = hdu_vis_list[0]
+                phi_arr = jnp.array(hdu_phi.data["VISPHI"], dtype=float)
+                d_phi_arr = jnp.array(hdu_phi.data["VISPHIERR"], dtype=float)
+                self.phi = jnp.concatenate((self.phi, phi_arr.flatten()))
+                self.d_phi = jnp.concatenate(
+                    (
+                        self.d_phi,
+                        d_phi_arr.flatten(),
+                    )
+                )
+                self.i_cps1, self.i_cps2, self.i_cps3 = None, None, None
+            elif self.cp_flag is True and len(hdu_t3_list) != 0:
+                hdu_phi = hdu_t3_list[0]
+                phi_arr = jnp.array(hdu_phi.data["T3PHI"], dtype=float)
+                d_phi_arr = jnp.array(hdu_phi.data["T3PHIERR"], dtype=float)
+                self.phi = jnp.concatenate((self.phi, phi_arr.flatten()))
+                self.d_phi = jnp.concatenate(
+                    (
+                        self.d_phi,
+                        d_phi_arr.flatten(),
+                    )
+                )
+                cp_sta_index = jnp.array(hdu_phi.data["STA_INDEX"], dtype=int)
+
+                # get indices of the baselines of the corresponding visibility
+                # measurements (i.e. index of the corresponding value in self.vis).
+                # We separately account for number of wavelength channels and
+                # previously loaded measurements below.
+                i_cps1, i_cps2, i_cps3 = cp_indices(
+                    vis_sta_index, cp_sta_index
+                )
+
+                # visibility indices for 1st wavelength channels
+                i_cps1 *= wavel_sol.size
+                i_cps2 *= wavel_sol.size
+                i_cps3 *= wavel_sol.size
+
+                # squeeze in channel offsets with broadcasting and account for
+                # previously loaded visibility measurments
+                i_wave_offsets = jnp.arange(0, wavel_sol.size)[
+                    None, :
+                ]  # squeeze in channel offsets (shape (1, Nw))
+                i_cps1 = (i_cps1[:, None] + i_wave_offsets).ravel() + nvis_old
+                i_cps2 = (i_cps2[:, None] + i_wave_offsets).ravel() + nvis_old
+                i_cps3 = (i_cps3[:, None] + i_wave_offsets).ravel() + nvis_old
+
+                self.i_cps1 = jnp.concatenate((self.i_cps1, i_cps1))
+                self.i_cps2 = jnp.concatenate((self.i_cps2, i_cps2))
+                self.i_cps3 = jnp.concatenate((self.i_cps3, i_cps3))
+
+                # make sure the indices are integer
+                self.i_cps1 = jnp.astype(self.i_cps1, int)
+                self.i_cps2 = jnp.astype(self.i_cps2, int)
+                self.i_cps3 = jnp.astype(self.i_cps3, int)
+            else:
+                raise ValueError(
+                    "No corresponding absolute phases in OI_VIS table or closure"
+                    "phases in OI_T3 table found for OI_WAVELENGTH table with "
+                    f"INSNAME: {insname}."
+                )
 
     def flatten_data(self):
         """
@@ -576,7 +589,6 @@ class BinaryModelCartesian(zx.Base):
         return cvis_binary(uu, vv, self.ddec, self.dra, self.flux)
 
 
-# TODO: add spectral indices for overresolved background and secondary star.
 class BinaryGaussianRimModel(zx.Base):
     r"""
     Represents a chromatic 'disk' rim surrounding a binary star.

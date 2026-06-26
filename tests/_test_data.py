@@ -1,25 +1,14 @@
-import warnings
-
 import jax.numpy as np
 import jax.scipy as jsp
 import numpy as onp
-import pyoifits as oifits
 
 from drpangloss.models import BinaryModelCartesian, OIData
+
 
 fname = "NuHor_F480M.oifits"
 ddir = "./data/"
 
-data = oifits.open(ddir + fname)
-
-try:
-    data.verify("silentfix")
-except AttributeError:
-    warnings.warn(
-        "Skipping pyoifits verify due to upstream compatibility issue on this environment"
-    )
-
-oidata = OIData(data)
+oidata = OIData(ddir + fname)
 u, v, cp, cp_err, vis2, vis2_err, i_cps1, i_cps2, i_cps3 = oidata.unpack_all()
 
 params = ["dra", "ddec", "flux"]

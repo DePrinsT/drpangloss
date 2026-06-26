@@ -9,7 +9,6 @@ import jax.numpy as jnp
 import numpy as np
 import numpyro
 import numpyro.distributions as dist
-import pyoifits as oifits
 from jax.flatten_util import ravel_pytree
 from numpyro.infer.initialization import init_to_value
 from numpyro.infer import MCMC, NUTS
@@ -403,8 +402,7 @@ def run_synthetic_binary_demo(
     # Load through both dict loader and OIData path to demonstrate roundtrip.
     _ = load_oifits_dict(str(output_path))
 
-    loaded = oifits.open(str(output_path))
-    oidata = OIData(loaded)
+    oidata = OIData(str(output_path))
 
     grid_est = _recover_grid(oidata)
     hmc_median, hmc_std = _recover_hmc(oidata, init=grid_est)

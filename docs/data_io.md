@@ -1,4 +1,4 @@
-<!-- AUTO-GENERATED FROM /home/runner/work/drpangloss/drpangloss/notebooks/data_io.ipynb by scripts/sync_tutorial_docs.py. -->
+<!-- AUTO-GENERATED FROM /home/toond/Documents/phd/python/drpangloss/notebooks/data_io.ipynb by scripts/sync_tutorial_docs.py. -->
 <!-- Edit the notebook, then re-run the sync script. -->
 
 # Data I/O
@@ -7,7 +7,6 @@
 
 ```python
 import numpy as np
-import pyoifits as oifits
 
 from pathlib import Path
 import sys
@@ -63,8 +62,7 @@ module.save_oifits_dict(
 Let's read the data - this is easy!
 
 ```python
-loaded = oifits.open(str(out))
-oidata = module.OIData(loaded)
+oidata = module.OIData(str(out))
 ```
 
 ## OIData Object
@@ -91,7 +89,7 @@ print("OIData keys:", list(oidata.__dict__.keys()))
 ```
 
 ```text
-OIData keys: ['wavel', 'vis', 'd_vis', 'u', 'v', 'v2_flag', 'phi', 'd_phi', 'i_cps1', 'i_cps2', 'i_cps3', 'cp_flag']
+OIData keys: ['vis', 'd_vis', 'phi', 'd_phi', 'u', 'v', 'wavel', 'i_cps1', 'i_cps2', 'i_cps3', 'v2_flag', 'cp_flag']
 ```
 
 ## Verification

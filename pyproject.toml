@@ -11,7 +11,7 @@ authors = [
 ]
 keywords = ["python", "optics", "machine-learning", "jax", "autodiff", "differentiable", "diffraction", "simulation", "telescope", "drpangloss"]
 urls = {repository = "https://github.com/benjaminpope/drpangloss"}
-dependencies = ["jax", "jaxlib", "zodiax","numpy","matplotlib","numpyro","tensorflow-probability", "astropy","tqdm","ipywidgets","optimistix","scipy","astroquery", "pyoifits", "termcolor", "chainconsumer"]
+dependencies = ["jax", "jaxlib", "zodiax","numpy","matplotlib","numpyro","tensorflow-probability", "astropy","tqdm","ipywidgets","optimistix","scipy","astroquery", "termcolor", "chainconsumer"]
 classifiers=[
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",

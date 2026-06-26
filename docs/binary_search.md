@@ -1,4 +1,4 @@
-<!-- AUTO-GENERATED FROM /home/runner/work/drpangloss/drpangloss/notebooks/binary_search.ipynb by scripts/sync_tutorial_docs.py. -->
+<!-- AUTO-GENERATED FROM /home/toond/Documents/phd/python/drpangloss/notebooks/binary_search.ipynb by scripts/sync_tutorial_docs.py. -->
 <!-- Edit the notebook, then re-run the sync script. -->
 
 # Binary recovery with grid search and HMC
@@ -176,10 +176,6 @@ print(
 ```
 
 ```text
-W0304 14:17:57.533295 3060719 cpp_gen_intrinsics.cc:74] Empty bitcode string provided for eigen. Optimizations relying on this IR will be disabled.
-```
-
-```text
 HMC estimate: dra=120 mas, ddec=-80.1 mas, flux=0.0039
 ```
 
@@ -210,7 +206,7 @@ HMC estimate from diagnostics table: dra=120 mas, ddec=-80.1 mas, flux=0.0039
 ## Fisher Reparametrization
 If you are finding that HMC is failing to converge quickly on high-SNR data, it can be because the posteriors are often highly correlated between parameters. The good thing is that [`zodiax`](https://github.com/LouisDesdoigts/zodiax), the backend of `drpangloss`, has helper functions to reparametrize problems into their natural scales, parametrized by a fiducial value for all parameters `x0` and the [Fisher Information Matrix](https://en.wikipedia.org/wiki/Fisher_information).
 
-See [this `zodiax` tutorial](https://louisdesdoigts.github.io/zodiax/optimisation_tools/) for more information!
+See [this `zodiax` tutorial](https://github.com/LouisDesdoigts/zodiax_tutorials/blob/main/optimisation_tools.ipynb) for more information!
 
 ```python
 x0_dict = {
@@ -325,13 +321,9 @@ plot_chainconsumer_diagnostics(
 );
 ```
 
-```text
-Parameter dra in chain HMC Cartesian is not constrained
-```
+![binary_search output 19.1](generated/binary_search_cell019_out01.png)
 
 ![binary_search output 19.2](generated/binary_search_cell019_out02.png)
-
-![binary_search output 19.3](generated/binary_search_cell019_out03.png)
 
 And in polar coordinates:
 
@@ -348,13 +340,9 @@ plot_chainconsumer_diagnostics(
 );
 ```
 
-```text
-Parameter sep in chain HMC Polar is not constrained
-```
+![binary_search output 21.1](generated/binary_search_cell021_out01.png)
 
 ![binary_search output 21.2](generated/binary_search_cell021_out02.png)
-
-![binary_search output 21.3](generated/binary_search_cell021_out03.png)
 
 ## Posterior Predictive Checks with Correlation Plots
 

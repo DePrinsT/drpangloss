@@ -1,4 +1,4 @@
-<!-- AUTO-GENERATED FROM /home/runner/work/drpangloss/drpangloss/notebooks/contrast_limits.ipynb by scripts/sync_tutorial_docs.py. -->
+<!-- AUTO-GENERATED FROM /home/toond/Documents/phd/python/drpangloss/notebooks/contrast_limits.ipynb by scripts/sync_tutorial_docs.py. -->
 <!-- Edit the notebook, then re-run the sync script. -->
 
 # Contrast limits with Ruffio method
@@ -22,7 +22,6 @@ import jax.numpy as jnp
 import numpy as onp
 import jax.scipy as jsp
 import matplotlib.pyplot as plt
-import pyoifits as oifits
 
 repo_root = Path.cwd()
 if not (repo_root / "src").exists():
@@ -55,13 +54,8 @@ rng = onp.random.default_rng(7)
 
 fname = "NuHor_F480M.oifits"
 ddir = "../data/"
-data = oifits.open(ddir + fname)
-try:
-    data.verify("silentfix")
-except AttributeError:
-    pass
 
-oidata = OIData(data)
+oidata = OIData(ddir + fname)
 
 # Pure-noise injection amplitude (1.0 uses nominal OIData uncertainties).
 noise_amp = 1.0
@@ -146,11 +140,7 @@ plot_contrast_limit_map(
 );
 ```
 
-```text
-W0304 14:46:13.318260 3093216 cpp_gen_intrinsics.cc:74] Empty bitcode string provided for eigen. Optimizations relying on this IR will be disabled.
-```
-
-![contrast_limits output 9.2](generated/contrast_limits_cell009_out02.png)
+![contrast_limits output 9.1](generated/contrast_limits_cell009_out01.png)
 
 ## Absil Contrast Limits
 
@@ -217,7 +207,7 @@ ax.legend(loc="best")
 ```
 
 ```text
-<matplotlib.legend.Legend at 0x166d95690>
+<matplotlib.legend.Legend at 0x78bba4d3dd50>
 ```
 
 ![contrast_limits output 13.2](generated/contrast_limits_cell013_out02.png)

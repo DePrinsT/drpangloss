@@ -1,4 +1,4 @@
-<!-- AUTO-GENERATED FROM /home/runner/work/drpangloss/drpangloss/notebooks/model_syntax.ipynb by scripts/sync_tutorial_docs.py. -->
+<!-- AUTO-GENERATED FROM /home/toond/Documents/phd/python/drpangloss/notebooks/model_syntax.ipynb by scripts/sync_tutorial_docs.py. -->
 <!-- Edit the notebook, then re-run the sync script. -->
 
 # Visibility Models
@@ -69,7 +69,7 @@ max_complex_diff = float(np.max(np.abs(np.asarray(cvis_ang - cvis_true))))
 ```text
 {'cartesian': {'dra': 120.0, 'ddec': -80.0, 'flux': 0.004},
  'angular': {'sep': 144.22205101855957,
-  'pa': 236.30993247402023,
+  'pa': 236.3099324740202,
   'contrast': 250.0},
  'max_complex_visibility_difference': 6.009040731669302e-08}
 ```
@@ -177,7 +177,7 @@ max_complex_diff = float(np.max(np.abs(np.asarray(cvis_ang - cvis_true))))
 
 ```text
 {'sep_mas': 144.22205101855957,
- 'pa_deg': 236.30993247402023,
+ 'pa_deg': 236.3099324740202,
  'contrast': 250.0,
  'max_complex_visibility_difference': 6.009040731669302e-08}
 ```
@@ -246,8 +246,8 @@ ll_cart_perturbed = float(
 
 ```text
 {'ll_cart_true': -14.96725845336914,
- 'll_ang_equivalent': -14.967044830322266,
- 'll_cart_perturbed': -854.9948120117188,
+ 'll_ang_equivalent': -14.967045783996582,
+ 'll_cart_perturbed': -854.9947509765625,
  'true_beats_perturbed': True}
 ```
 
