@@ -26,8 +26,8 @@ from .inference import (
 
 
 # TODO: make this work if one wavelength solution HDU has multiple associated data HDUs
-# (epoch 5 is an example of this). Also make an option to discard flagged data, maybe
-# using a boolean mask?
+# (epoch 5 is an example of this). Also make an option to discard flagged data? Maybe
+# wit a boolean mask? Though this would be very hard to do.
 class OIData(zx.Base):
     """
     Store and transform optical-interferometry observables.
@@ -1466,7 +1466,13 @@ def loglike(values, params, data_obj, model_class):
     model_data = data_obj.model(model_class(**param_dict))
     data, errors = data_obj.flatten_data()
 
-    return -0.5 * jnp.sum((data - model_data) ** 2 / errors**2)
+    n = data.size
+
+    return (
+        -0.5 * jnp.sum((data - model_data) ** 2 / errors**2)
+        - 0.5 * jnp.sum(jnp.log(errors**2))
+        - n / 2 * jnp.log(2 * jnp.pi)
+    )
 
 
 def loglike_nosignal(values, params, data_obj, model_class):
@@ -1501,7 +1507,13 @@ def loglike_nosignal(values, params, data_obj, model_class):
         ]
     )
 
-    return -0.5 * jnp.sum((data - model_data) ** 2 / errors**2)
+    n = data.size
+
+    return (
+        -0.5 * jnp.sum((data - model_data) ** 2 / errors**2)
+        - 0.5 * jnp.sum(jnp.log(errors**2))
+        - n / 2 * jnp.log(2 * jnp.pi)
+    )
 
 
 def laplace_cov(values, params, data_obj, model_class):
