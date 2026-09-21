@@ -589,6 +589,113 @@ class BinaryModelCartesian(zx.Base):
         return cvis_binary(uu, vv, self.ddec, self.dra, self.flux)
 
 
+class TrinaryModelCartesian(zx.Base):
+    """
+    Represent a trinary model using Cartesian sky offsets.
+
+    Parameters
+    ----------
+    dra1 : float or array-like
+        Right-ascension offset in milliarcseconds for first companion.
+    ddec1 : float or array-like
+        Declination offset in milliarcseconds for first companion.
+    flux1 : float or array-like
+        Companion-to-primary flux ratio for first companion.
+    dra : float or array-like
+        Right-ascension offset in milliarcseconds for second companion.
+    ddec : float or array-like
+        Declination offset in milliarcseconds for second companion.
+    flux : float or array-like
+        Companion-to-primary flux ratio for first companion.
+
+    Notes
+    -----
+    This parameterization is useful for optimization and inference workflows
+    that operate directly in Cartesian offsets.
+    """
+
+    dra1: jax.Array
+    ddec1: jax.Array
+    flux1: jax.Array
+    dra: jax.Array
+    ddec: jax.Array
+    flux: jax.Array
+
+    def __init__(self, dra1, ddec1, flux1, dra, ddec, flux):
+        """
+        Initialize a trinary model in Cartesian offsets.
+
+        Parameters
+        ----------
+        dra1 : float or array-like
+            Right-ascension offset in milliarcseconds for first companion.
+        ddec1 : float or array-like
+            Declination offset in milliarcseconds for first companion.
+        flux1 : float or array-like
+            Companion-to-primary flux ratio for first companion.
+        dra : float or array-like
+            Right-ascension offset in milliarcseconds for second companion.
+        ddec : float or array-like
+            Declination offset in milliarcseconds for second companion.
+        flux : float or array-like
+            Companion-to-primary flux ratio for first companion.
+        """
+
+        self.dra1 = jnp.asarray(dra1, dtype=float)
+        self.ddec1 = jnp.asarray(ddec1, dtype=float)
+        self.flux1 = jnp.asarray(flux1, dtype=float)
+        self.dra = jnp.asarray(dra, dtype=float)
+        self.ddec = jnp.asarray(ddec, dtype=float)
+        self.flux = jnp.asarray(flux, dtype=float)
+
+    def __repr__(self):
+        """Return a readable representation of trinary Cartesian parameters."""
+        rep = f"TrinaryModelCartesian(dra1={self.dra1}, ddec1={self.ddec1},"
+        f"flux1={self.flux1}, dra={self.dra}, ddec={self.ddec}, flux={self.flux})"
+        return rep
+
+    def unpack_all(self):
+        """
+        Return all model parameters in Cartesian form.
+
+        Returns
+        -------
+        tuple[array-like, array-like, array-like, array-like, array-like, array-like]
+            Tuple ``(dra1, ddec1, flux1, dra, ddec, flux,)``.
+        """
+        return self.dra, self.ddec, self.flux
+
+    def model(self, u, v, wavel):
+        """
+        Evaluate complex visibilities for this Cartesian trinary model.
+
+        Parameters
+        ----------
+        u : array-like
+            Baseline ``u`` coordinates in meters.
+        v : array-like
+            Baseline ``v`` coordinates in meters.
+        wavel : array-like
+            Effective wavelength(s) in meters.
+
+        Returns
+        -------
+        array-like
+            Complex visibility samples on the provided baselines.
+        """
+        uu, vv = u / wavel, v / wavel
+        return cvis_trinary(
+            uu,
+            vv,
+            self.ddec1,
+            self.dra1,
+            self.flux1,
+            self.ddec,
+            self.dra,
+            self.flux,
+        )
+
+
 class BinaryGaussianRimModel(zx.Base):
     r"""
     Represents a chromatic 'disk' rim surrounding a binary star.
@@ -1038,12 +1145,73 @@ def cvis_binary(u, v, ddec, dra, planet):
     p2 = planet / (star + planet)
 
     # relative locations
-    ddec = ddec * jnp.pi / (180.0 * 3600.0 * 1000.0)
-    dra = dra * jnp.pi / (180.0 * 3600.0 * 1000.0)
+    ddec = ddec * MAS2RAD
+    dra = dra * MAS2RAD
     phi_r = jnp.cos(-2 * jnp.pi * (u * dra + v * ddec))
     phi_i = jnp.sin(-2 * jnp.pi * (u * dra + v * ddec))
 
     cvis = p3 + p2 * phi_r + p2 * phi_i * 1.0j
+
+    return cvis
+
+
+def cvis_trinary(u, v, ddec1, dra1, flux1, ddec2, dra2, flux2):
+    """Compute complex visibilities for a Cartesian-parameterized trinary model.
+
+    Parameters
+    ----------
+    u : array-like
+        Baseline ``u`` coordinates in wavelength units.
+    v : array-like
+        Baseline ``v`` coordinates in wavelength units.
+    dra1 : float or array-like
+        Right-ascension offset in milliarcseconds for first companion.
+    ddec1 : float or array-like
+        Declination offset in milliarcseconds for first companion.
+    flux1 : float or array-like
+        Companion-to-primary flux ratio for first companion.
+    dra2 : float or array-like
+        Right-ascension offset in milliarcseconds for second companion.
+    ddec2 : float or array-like
+        Declination offset in milliarcseconds for second companion.
+    flux2 : float or array-like
+        Companion-to-primary flux ratio for first companion.
+
+    Returns
+    -------
+    array-like
+        Complex visibility samples.
+    """
+    # Flux of primary star.
+    fprim = 1
+    # Flux of first companion.
+    f1 = flux1 * fprim
+    # Flux of second companion.
+    f2 = flux2 * fprim
+    # Total flux
+    ftot = fprim + f1 + f2
+
+    # Calculate total flux fractions (so total power = 1).
+    ffrac_prim, ffrac1, ffrac2 = fprim / ftot, f1 / ftot, f2 / ftot
+
+    # Relative companion locations
+    ddec1 = ddec1 * MAS2RAD
+    dra1 = dra1 * MAS2RAD
+    phi_r1 = jnp.cos(-2 * jnp.pi * (u * dra1 + v * ddec1))
+    phi_i1 = jnp.sin(-2 * jnp.pi * (u * dra1 + v * ddec1))
+
+    ddec2 = ddec2 * MAS2RAD
+    dra2 = dra2 * MAS2RAD
+    phi_r2 = jnp.cos(-2 * jnp.pi * (u * dra2 + v * ddec2))
+    phi_i2 = jnp.sin(-2 * jnp.pi * (u * dra2 + v * ddec2))
+
+    cvis = (
+        ffrac_prim
+        + ffrac1 * phi_r1
+        + ffrac1 * phi_i1 * 1.0j
+        + ffrac2 * phi_r2
+        + ffrac2 * phi_i2 * 1.0j
+    )
 
     return cvis
 
@@ -1440,7 +1608,7 @@ def hankel_n(n, base_norm, rpos, intensity):
     return hankel_n
 
 
-def loglike(values, params, data_obj, model_class):
+def loglike(values, params, data_obj, model_class, no_vis=False, no_phi=False):
     """
     Abstract log-likelihood function for a given model class and data object, assuming Gaussian errors.
 
@@ -1454,25 +1622,52 @@ def loglike(values, params, data_obj, model_class):
         Object containing the data to be fitted.
     model_class : class
         Model class to be fitted to the data.
+    no_vis : bool
+        Calculate log-likelihood excluding the visibility data.
+    no_phi : bool
+        Calculate log-likelihood excluding the phase data.
 
     Returns
     -------
     float
         Log-likelihood value.
     """
+    if no_vis and no_phi:
+        raise ValueError(
+            "Cannot set both `no_vis` and `no_phi` arguments to True."
+        )
 
     param_dict = dict(zip(params, values))
 
+    # Get model predictions and observed data in 1D arrays.
     model_data = data_obj.model(model_class(**param_dict))
     data, errors = data_obj.flatten_data()
 
-    n = data.size
+    # Filter out unwanted observables if needed.
+    if no_vis:
+        # Truncate to phase data only.
+        model_data = model_data[jnp.size(data_obj.vis) :]
+        data, errors = (
+            data[jnp.size(data_obj.vis) :],
+            errors[jnp.size(data_obj.vis) :],
+        )
+    elif no_phi:
+        # Truncate to visibility data only.
+        model_data = model_data[: jnp.size(data_obj.vis)]
+        data, errors = (
+            data[: jnp.size(data_obj.vis)],
+            errors[: jnp.size(data_obj.vis)],
+        )
 
-    return (
+    # Compute log-likelihood.
+    n = data.size
+    logl = (
         -0.5 * jnp.sum((data - model_data) ** 2 / errors**2)
         - 0.5 * jnp.sum(jnp.log(errors**2))
         - n / 2 * jnp.log(2 * jnp.pi)
     )
+
+    return logl
 
 
 def loglike_nosignal(values, params, data_obj, model_class):
@@ -1551,7 +1746,15 @@ def laplace_cov(values, params, data_obj, model_class):
 
 
 def laplace_contrast_uncertainty(
-    flux, dra, ddec, data_obj, model_class, params=None
+    flux,
+    dra,
+    ddec,
+    data_obj,
+    model_class,
+    fixed_dict=None,
+    params=None,
+    no_vis=False,
+    no_phi=False,
 ):
     """
     Compute the Laplace uncertainty in flux at a fixed sky position.
@@ -1594,9 +1797,28 @@ def laplace_contrast_uncertainty(
     if params is None:
         params = ["dra", "ddec", "flux"]
 
-    objective = lambda f: (
-        -loglike([dra, ddec, f], params, data_obj, model_class)
-    )
+    if fixed_dict:
+        objective = lambda f: (
+            -loglike(
+                [dra, ddec, f] + list(fixed_dict.values()),
+                params + list(fixed_dict.keys()),
+                data_obj,
+                model_class,
+                no_vis=no_vis,
+                no_phi=no_phi,
+            )
+        )
+    else:
+        objective = lambda f: (
+            -loglike(
+                [dra, ddec, f],
+                params,
+                data_obj,
+                model_class,
+                no_vis=no_vis,
+                no_phi=no_phi,
+            )
+        )
     # Compute the scalar second derivative d²(-logL)/df² via double grad.
     # Using jax.grad twice makes it explicit that we expect a scalar result.
     # jax.hessian on a scalar-to-scalar function returns a 0-d array (not a

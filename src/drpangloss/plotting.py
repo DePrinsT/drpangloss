@@ -315,7 +315,7 @@ def plot_likelihood_grid(
     ax.set_title("Likelihood grid")
     if truths is not None or best_point is not None:
         ax.legend(loc="best")
-    ax.invert_yaxis()
+    ax.invert_xaxis()
     return fig, ax
 
 

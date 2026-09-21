@@ -12,6 +12,8 @@ import jax.scipy as jsp
 """Grid-based fitting and contrast-limit utilities."""
 
 
+# TODO: modify to have different flux parameter names that can be used, i.e. because
+# of component suffixes.
 def _infer_grid_parameter_keys(samples_dict):
     """Infer coordinate and flux-like keys from a 3-parameter sample grid."""
     params = list(samples_dict.keys())
@@ -30,8 +32,10 @@ def _infer_grid_parameter_keys(samples_dict):
     return coord_keys, flux_key
 
 
-@partial(jit, static_argnames=("model_class"))
-def likelihood_grid(data_obj, model_class, samples_dict):
+@partial(jit, static_argnames=("model_class", "no_vis", "no_phi"))
+def likelihood_grid(
+    data_obj, model_class, samples_dict, no_vis=False, no_phi=False
+):
     """
     Function to vmap a likelihood function over a grid of parameter values provided in a dictionary.
 
@@ -43,6 +47,10 @@ def likelihood_grid(data_obj, model_class, samples_dict):
         Model class to be fitted to the data.
     samples_dict: dict
         Dictionary of parameter names and values to be fitted to the data.
+    no_vis : bool
+        Calculate log-likelihood excluding the visibility data.
+    no_phi : bool
+        Calculate log-likelihood excluding the phase data.
 
     Returns
     -------
@@ -55,13 +63,19 @@ def likelihood_grid(data_obj, model_class, samples_dict):
     vals = jnp.array(jnp.meshgrid(*samples))
     vals_vec = vals.reshape((len(vals), -1)).T
 
-    fn = vmap(lambda values: loglike(values, params, data_obj, model_class))
+    fn = vmap(
+        lambda values: loglike(
+            values, params, data_obj, model_class, no_vis=no_vis, no_phi=no_phi
+        )
+    )
 
     return fn(vals_vec).reshape(vals.shape[1:])  # check the shapes output here
 
 
 @partial(jit, static_argnames=("model_class"))
-def optimized_likelihood_grid(data_obj, model_class, samples_dict):
+def optimized_likelihood_grid(
+    data_obj, model_class, samples_dict, no_vis=False, no_phi=False
+):
     """
     Function to optimize the contrast of a model over a grid of parameter values provided in a dictionary.
 
@@ -90,7 +104,11 @@ def optimized_likelihood_grid(data_obj, model_class, samples_dict):
     vals = jnp.array(jnp.meshgrid(*samples))
     vals_vec = vals.reshape((len(vals), -1)).T
 
-    fn = vmap(lambda values: loglike(values, params, data_obj, model_class))
+    fn = vmap(
+        lambda values: loglike(
+            values, params, data_obj, model_class, no_vis=no_vis, no_phi=no_phi
+        )
+    )
 
     loglike_im = fn(vals_vec).reshape(
         vals.shape[1:]
@@ -101,28 +119,48 @@ def optimized_likelihood_grid(data_obj, model_class, samples_dict):
     coords = [samples_dict[key] for key in coord_keys]
     ras, decs = jnp.meshgrid(*coords)
     vals = jnp.array(
-        [samples_dict[flux_key][best_contrast_indices], decs, ras]
+        [
+            samples_dict[flux_key][best_contrast_indices],
+            decs,
+            ras,
+        ]
     )
     vals_vec = vals.reshape((len(vals), -1)).T
 
-    to_optimize = lambda flux, dra_inp, ddec_inp: -loglike(
-        [dra_inp, ddec_inp, flux], params, data_obj, model_class
+    to_optimize = lambda flux, dra_inp, ddec_inp: (
+        -loglike(
+            [dra_inp, ddec_inp, flux],
+            params,
+            data_obj,
+            model_class,
+            no_vis=no_vis,
+            no_phi=no_phi,
+        )
     )
-    bestcon = lambda flux, dra, ddec: optx.compat.minimize(
-        to_optimize,
-        x0=jnp.array([flux]),
-        args=(jnp.asarray(dra), jnp.asarray(ddec)),
-        method="BFGS",
-        options={"maxiter": 100},
-    ).fun
+    bestcon = lambda flux, dra, ddec: (
+        optx.compat.minimize(
+            to_optimize,
+            x0=jnp.array([flux]),
+            args=(jnp.asarray(dra), jnp.asarray(ddec)),
+            method="BFGS",
+            options={"maxiter": 100},
+        ).fun
+    )
 
     fn = vmap(lambda values: bestcon(*values))
 
     return -fn(vals_vec).reshape(vals.shape[1:])
 
 
-@partial(jit, static_argnames=("model_class"))
-def optimized_contrast_grid(data_obj, model_class, samples_dict):
+@partial(jit, static_argnames=("model_class", "no_vis", "no_phi"))
+def optimized_contrast_grid(
+    data_obj,
+    model_class,
+    samples_dict,
+    fixed_dict=None,
+    no_vis=False,
+    no_phi=False,
+):
     """
     Function to optimize the contrast of a model over a grid of parameter values provided in a dictionary.
 
@@ -151,7 +189,31 @@ def optimized_contrast_grid(data_obj, model_class, samples_dict):
     vals = jnp.array(jnp.meshgrid(*samples))
     vals_vec = vals.reshape((len(vals), -1)).T
 
-    fn = vmap(lambda values: loglike(values, params, data_obj, model_class))
+    if fixed_dict:
+        fixed_vals = jnp.array(list(fixed_dict.values()))
+        fixed_vals = fixed_vals.reshape((fixed_vals.size,))
+
+        fn = vmap(
+            lambda values: loglike(
+                jnp.concatenate((values, fixed_vals)),
+                params + list(fixed_dict.keys()),
+                data_obj,
+                model_class,
+                no_vis=no_vis,
+                no_phi=no_phi,
+            )
+        )
+    else:
+        fn = vmap(
+            lambda values: loglike(
+                values,
+                params,
+                data_obj,
+                model_class,
+                no_vis=no_vis,
+                no_phi=no_phi,
+            )
+        )
 
     loglike_im = fn(vals_vec).reshape(
         vals.shape[1:]
@@ -164,29 +226,60 @@ def optimized_contrast_grid(data_obj, model_class, samples_dict):
     coords = [samples_dict[key] for key in coord_keys]
     ras, decs = jnp.meshgrid(*coords)
     vals = jnp.array(
-        [samples_dict[flux_key][best_contrast_indices], decs, ras]
+        [
+            samples_dict[flux_key][best_contrast_indices],
+            decs,
+            ras,
+        ]
     )
     vals_vec = vals.reshape((len(vals), -1)).T
 
-    to_optimize = lambda flux, dra_inp, ddec_inp: -loglike(
-        [dra_inp, ddec_inp, flux], params, data_obj, model_class
+    if fixed_dict:
+        to_optimize = lambda flux, dra_inp, ddec_inp: (
+            -loglike(
+                [dra_inp, ddec_inp, flux] + list(fixed_dict.values()),
+                params + list(fixed_dict.keys()),
+                data_obj,
+                model_class,
+                no_vis=no_vis,
+                no_phi=no_phi,
+            )
+        )
+    else:
+        to_optimize = lambda flux, dra_inp, ddec_inp: (
+            -loglike(
+                [dra_inp, ddec_inp, flux],
+                params,
+                data_obj,
+                model_class,
+                no_vis=no_vis,
+                no_phi=no_phi,
+            )
+        )
+    bestcon = lambda flux, dra, ddec: (
+        optx.compat.minimize(
+            to_optimize,
+            x0=jnp.array([flux]),
+            args=(jnp.asarray(dra), jnp.asarray(ddec)),
+            method="BFGS",
+            options={"maxiter": 100},
+        ).x
     )
-    bestcon = lambda flux, dra, ddec: optx.compat.minimize(
-        to_optimize,
-        x0=jnp.array([flux]),
-        args=(jnp.asarray(dra), jnp.asarray(ddec)),
-        method="BFGS",
-        options={"maxiter": 100},
-    ).x
 
     fn = vmap(lambda values: bestcon(*values))
 
     return fn(vals_vec).reshape(vals.shape[1:])
 
 
-@partial(jit, static_argnames=("model_class"))
+@partial(jit, static_argnames=("model_class", "no_vis", "no_phi"))
 def laplace_contrast_uncertainty_grid(
-    best_contrast_indices, data_obj, model_class, samples_dict
+    best_contrast_indices,
+    data_obj,
+    model_class,
+    samples_dict,
+    fixed_dict=None,
+    no_vis=False,
+    no_phi=False,
 ):
     """
     Calculate the uncertainty with the Laplace method over a grid of parameters, for an optimized fit between a model and data object.
@@ -213,12 +306,24 @@ def laplace_contrast_uncertainty_grid(
     coords = [samples_dict[key] for key in coord_keys]
     ras, decs = jnp.meshgrid(*coords)
     vals = jnp.array(
-        [samples_dict[flux_key][best_contrast_indices], decs, ras]
+        [
+            samples_dict[flux_key][best_contrast_indices],
+            decs,
+            ras,
+        ]
     )
     vals_vec = vals.reshape((len(vals), -1)).T
 
     sigma = lambda flux, dra, ddec: laplace_contrast_uncertainty(
-        flux, dra, ddec, data_obj, model_class, params=params
+        flux,
+        dra,
+        ddec,
+        data_obj,
+        model_class,
+        fixed_dict=fixed_dict,
+        no_vis=no_vis,
+        no_phi=no_phi,
+        params=params,
     )
     fn = vmap(lambda values: sigma(*values))
 
@@ -376,7 +481,10 @@ def azimuthalAverage(
 
     if center is None:
         center = np.array(
-            [(x.max() - x.min()) / 2.0, (y.max() - y.min()) / 2.0]
+            [
+                (x.max() - x.min()) / 2.0,
+                (y.max() - y.min()) / 2.0,
+            ]
         )
 
     r = np.hypot(x - center[0], y - center[1])
@@ -450,7 +558,9 @@ def azimuthalAverage(
 
 
 @partial(jit, static_argnames=("model_class"))
-def absil_limits(samples_dict, data_obj, model_class, sigma):
+def absil_limits(
+    samples_dict, data_obj, model_class, sigma, no_vis=False, no_phi=False
+):
     """
 
     Using Jax for optimization, calculate the detection limits for a given model class and data object.
@@ -486,9 +596,11 @@ def absil_limits(samples_dict, data_obj, model_class, sigma):
     samples = samples_dict.values()
 
     # define chi2 wrappers
-    chi2_bin = (
-        lambda values: -2
-        * loglike(values, params, data_obj, model_class)
+    chi2_bin = lambda values: (
+        -2
+        * loglike(
+            values, params, data_obj, model_class, no_vis=no_vis, no_phi=no_phi
+        )
         / ndof
     )
     chi2_null = chi2_bin(jnp.zeros(len(params)))
@@ -499,11 +611,8 @@ def absil_limits(samples_dict, data_obj, model_class, sigma):
 
     # define intermediate function: nsigma detection significance, difference from sigma
 
-    loss = (
-        lambda values: (
-            nsigma(chi2_bin(values) / ndof, chi2_null / ndof, ndof) - sigma
-        )
-        ** 2
+    loss = lambda values: (
+        (nsigma(chi2_bin(values) / ndof, chi2_null / ndof, ndof) - sigma) ** 2
     )
 
     loss_im = vmap(loss)(vals_vec).reshape(
@@ -516,23 +625,33 @@ def absil_limits(samples_dict, data_obj, model_class, sigma):
     coords = [samples_dict[key] for key in coord_keys]
     ras, decs = jnp.meshgrid(*coords)
     vals = jnp.array(
-        [samples_dict[flux_key][best_contrast_indices], decs, ras]
+        [
+            samples_dict[flux_key][best_contrast_indices],
+            decs,
+            ras,
+        ]
     )
     vals_vec = vals.reshape((len(vals), -1)).T
 
     # define optimization wrapper for the contrast
     to_optimize = lambda flux, dra_inp, ddec_inp: loss(
-        [dra_inp, ddec_inp, 10**flux]
+        [
+            dra_inp,
+            ddec_inp,
+            10**flux,
+        ]
     )
 
     # optimize
-    bestcon = lambda flux, dra, ddec: optx.compat.minimize(
-        to_optimize,
-        x0=jnp.array([flux]),
-        args=(jnp.asarray(dra), jnp.asarray(ddec)),
-        method="BFGS",
-        options={"maxiter": 100},
-    ).x
+    bestcon = lambda flux, dra, ddec: (
+        optx.compat.minimize(
+            to_optimize,
+            x0=jnp.array([flux]),
+            args=(jnp.asarray(dra), jnp.asarray(ddec)),
+            method="BFGS",
+            options={"maxiter": 100},
+        ).x
+    )
 
     fn = vmap(lambda values: bestcon(*values))
     limits = fn(vals_vec).reshape(

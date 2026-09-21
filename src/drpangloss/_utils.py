@@ -451,19 +451,21 @@ def dict_merge_az_amp_and_az_pa(d):
     """Function for taking a dictionary mapping parameter key-val pairs (where the
     keys indicate parameter names), taking all `az_ampi` and `az_pai` pairs and then
     merging those into single-array `az_amps` and `az_pas` key-val pairs.
+
+    Parameters
+    ----------
+    d : dict
+        Dictionary mapping parameter names to parameter values.
+
+    Returns
+    -------
+    dict
+        A new dictionary where the values for different azimuthal modulation parameters
+        are aggregated into 1D arrays in the `az_amps` and `az_pas` keywords. The
+        original key-val pairs for the different azimuthal parameters are removed.
     """
     # New dict
     d_new = {key: val for key, val in d.items() if not key.startswith("az_")}
-
-    # # Number of modulations
-    # nmod = sum(1 for key in d if key.startswith("az_amp"))
-
-    # # Concatenate together.
-    # az_amps = jnp.array([])
-    # az_pas = jnp.array([])
-    # for i in range(1, nmod + 1):
-    #     az_amps = jnp.concatenate((az_amps, jnp.atleast_1d(d[f"az_amp{i}"])))
-    #     az_pas = jnp.concatenate((az_pas, jnp.atleast_1d(d[f"az_pa{i}"])))
 
     if any(key.startswith("az_amp") for key in d):
         amp_keys = sorted(k for k in d if k.startswith("az_amp"))
@@ -476,6 +478,74 @@ def dict_merge_az_amp_and_az_pa(d):
         d_new["az_pas"] = az_pas
 
     return d_new
+
+
+def check_az_prof_nonnegative(az_amps, az_pas, tol=1e-6):
+    r"""Returns `False` if $1 + f(theta)$ drops below 0 at any point, where $f$ is a
+    harmonic series of form $I(r, \theta) = \sum_{m=0}^{n} A_m \cos{(m(\theta - \pa_m)$.
+    This is done using a Laurent polynomial + companion matrix approach, and should
+    thus be pretty quick.
+
+    Parameters
+    ----------
+    az_amps : array-like
+        1D array containing the azimuthal modulation order amplitudes, starting from
+        order 1.
+    az_pas : array-like
+        1D array containing the azimuthal modulation order position angles, starting from
+        order 1.
+
+    Returns
+    -------
+    bool
+        Whether the intensity profile $1 + f(\theta)$, where $f(\theta)$ is described
+        by the azimuthal modulations, remains positive.
+    """
+    k = len(az_amps)
+    deg = 2 * k
+
+    # Orders start from 1 up to k
+    idx = jnp.arange(1, k + 1)
+    phases_terms_rad = az_pas * DEG2RAD * idx
+
+    # Initialize polynomial coefficients (must be complex).
+    coeffs = jnp.zeros(deg + 1) + 0j
+
+    # Correctly aligned Fourier derivative polterms for z^k * f'(z) = 0.
+    lower_vals = -0.5j * az_amps * idx * jnp.exp(1j * phases_terms_rad)
+    upper_vals = 0.5j * az_amps * idx * jnp.exp(-1j * phases_terms_rad)
+
+    # Set complex polynomial coefficients.
+    coeffs = coeffs.at[k - jnp.arange(1, k + 1)].set(lower_vals)
+    coeffs = coeffs.at[k + jnp.arange(1, k + 1)].set(upper_vals)
+
+    # Prevent division-by-zero errors during matrix normalization.
+    leading_coef = jnp.where(
+        jnp.abs(coeffs[-1]) > 1e-6, coeffs[-1], 1.0 + 0.0j
+    )
+    coeffs_norm = coeffs / leading_coef
+
+    # Build Companion Matrix (must be complex).
+    companion_matrix = jnp.zeros((deg, deg)) + 0j
+    if deg > 1:
+        companion_matrix = companion_matrix.at[1:, :-1].set(jnp.eye(deg - 1))
+    companion_matrix = companion_matrix.at[:, -1].set(-coeffs_norm[:-1])
+
+    # Extract all complex points where derivative is 0.
+    roots = jnp.linalg.eigvals(companion_matrix)
+    angles = jnp.angle(roots)
+
+    # Evaluate at these local minima.
+    harmonics = az_amps * jnp.cos(idx * angles[:, None] - phases_terms_rad)
+    f_at_peaks = jnp.sum(harmonics, axis=1)
+
+    # Isolate valid peaks near unit circle.
+    global_min = jnp.min(f_at_peaks)
+
+    # Find global minimum of azimuthal profile.
+    f_global_min = 1.0 + global_min
+
+    return f_global_min > 0.0 - tol
 
 
 # ===
