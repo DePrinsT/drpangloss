@@ -908,7 +908,7 @@ class BinaryGaussianRimModel(zx.Base):
         """
         return (
             self.flux_p,
-            self.self.ud_p,
+            self.ud_p,
             self.dra_p,
             self.ddec_p,
             self.si_p,
@@ -922,7 +922,7 @@ class BinaryGaussianRimModel(zx.Base):
             self.pa_rim,
             self.si_rim,
             self.flux_bkg,
-            self.self.si_bkg,
+            self.si_bkg,
             self.az_amps,
             self.az_pas,
         )

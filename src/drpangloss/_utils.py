@@ -399,7 +399,11 @@ def undo_elliptical_transf_spat_freq(u, v, pa, stretch):
     pa_rad = pa * DEG2RAD
 
     # Apply rotation matrix and stretch factor (latter for projected minor rim axis).
-    ut = (u * jnp.cos(pa_rad) - v * jnp.sin(pa_rad)) / stretch
+    # NOTE: by the Fourier stretch theorem, spatial frequencies transform with the
+    # inverse-transpose of the image-plane matrix. Where coordinates are divided by the
+    # stretch factor (see `undo_elliptical_transf_coord`), spatial frequencies must
+    # therefore be multiplied by it.
+    ut = (u * jnp.cos(pa_rad) - v * jnp.sin(pa_rad)) * stretch
     vt = u * jnp.sin(pa_rad) + v * jnp.cos(pa_rad)
 
     return ut, vt
