@@ -1034,7 +1034,6 @@ class BinaryGaussianRimModel(zx.Base):
         # Get 2D meshgrid of coordinates & transform to frame where elliptical ring is
         # derotated and unstretched (i.e. elliptical coordinates).
         xmesh, ymesh = jnp.meshgrid(xflat, yflat)
-        rmesh = jnp.hypot(xmesh, ymesh)
 
         stretch = jnp.maximum(
             jnp.cos(self.inc_rim * DEG2RAD), 1e-8
@@ -1064,10 +1063,19 @@ class BinaryGaussianRimModel(zx.Base):
         az_factors = jax.vmap(f)(az_amps, az_phis_rad, az_orders)
         img = img * jnp.sum(az_factors, axis=0)
 
-        # Apply isotropic Gaussian convolution
+        # Apply isotropic Gaussian convolution. The kernel has an odd size and is
+        # centred on a pixel, so mode="same" introduces no shift. (An even-sized kernel
+        # is centred between pixels, and mode="same" would shift the image by half a
+        # pixel along both axes, away from the geometric center.)
         sigma = self.fwhm_rim / (2 * jnp.sqrt(2 * jnp.log(2)))
+        nker = npix + 1 - npix % 2
+        xker, yker = img_get_sky_coordinates(jnp.zeros((nker, nker)), ps=ps)
+        xmesh_ker, ymesh_ker = jnp.meshgrid(xker, yker)
+        rmesh_ker = jnp.hypot(xmesh_ker, ymesh_ker)
         img_gauss = (
-            1 / (2 * jnp.pi * sigma**2) * jnp.exp(-(rmesh**2) / (2 * sigma**2))
+            1
+            / (2 * jnp.pi * sigma**2)
+            * jnp.exp(-(rmesh_ker**2) / (2 * sigma**2))
         )
         img = fftconvolve(img, img_gauss, mode="same")
 
